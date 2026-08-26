@@ -1,0 +1,11 @@
+services:
+  job-sniffer:
+    build: .
+    container_name: job-sniffer
+    env_file:
+      - .env
+    environment:
+      - TELEGRAM_PROXY_URL=http://host.docker.internal:10809
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

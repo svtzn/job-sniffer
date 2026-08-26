@@ -1,0 +1,18 @@
+[project]
+name = "job-sniffer"
+version = "0.1.0"
+description = "Automated job search and notification service"
+requires-python = ">=3.12"
+dependencies = [
+    "aiogram>=3.30.0",
+    "alembic>=1.19.1",
+    "apscheduler>=3.11.3",
+    "asyncpg>=0.31.0",
+    "httpx>=0.28.1",
+    "playwright>=1.62.0",
+    "beautifulsoup4>=4.13.0",
+    "aiohttp-socks>=0.9.1",
+    "pydantic>=2.9.2,<2.11",
+    "pydantic-settings>=2.15.0",
+    "sqlalchemy>=2.0.52",
+]
