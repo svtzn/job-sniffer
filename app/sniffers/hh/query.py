@@ -2,8 +2,11 @@ from dataclasses import dataclass, fields
 from enum import Enum
 from urllib.parse import urlencode
 
-# Будет заменено на self.config.hh_base_url при необходимости
-_BASE_URL = "https://krasnodar.hh.ru/search/vacancy"
+# Запасной URL, если base_url не задан ни в запросе, ни в конфиге
+_BASE_URL = "https://hh.ru/search/vacancy"
+
+# Поля HHQuery, которые не являются GET-параметрами HH
+_NON_PARAM_FIELDS = {"base_url"}
 
 
 class Experience(str, Enum):
@@ -56,13 +59,15 @@ class HHQuery:
     page: int = 0
     items_on_page: int = 20
 
-    # Можно переопределить URL (по умолчанию берётся из модуля)
-    base_url: str = _BASE_URL
+    # None -> берётся HH_BASE_URL из конфига (подставляет сниффер) или _BASE_URL
+    base_url: str | None = None
 
     def get_params(self) -> dict:
         params = {}
 
         for field in fields(self):
+            if field.name in _NON_PARAM_FIELDS:
+                continue
             value = getattr(self, field.name)
 
             if not value:
@@ -71,8 +76,8 @@ class HHQuery:
             if isinstance(value, Enum):
                 params[field.name] = value.value
 
-            elif isinstance(value, tuple):
-                params[field.name] = [v.value for v in value]
+            elif isinstance(value, (tuple, list, set, frozenset)):
+                params[field.name] = [v.value if isinstance(v, Enum) else v for v in value]
 
             elif isinstance(value, int):
                 params[field.name] = str(value)
@@ -85,4 +90,5 @@ class HHQuery:
     def get_url(self) -> str:
         params = self.get_params()
         query = urlencode(params, doseq=True)
-        return f"{self.base_url}?{query}" if query else self.base_url
+        base_url = self.base_url or _BASE_URL
+        return f"{base_url}?{query}" if query else base_url

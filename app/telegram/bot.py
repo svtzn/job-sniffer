@@ -1,35 +1,49 @@
 import asyncio
+import logging
 
 from aiogram import Bot, Dispatcher
+from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.enums import ParseMode
+from aiogram.types import BotCommand
 
 from app.config import get_settings
 from app.telegram.handlers import router
 
+logger = logging.getLogger(__name__)
+
+COMMANDS = [
+    BotCommand(command="search", description="Искать вакансии (или повторить последний поиск)"),
+    BotCommand(command="filters", description="Фильтры поиска"),
+    BotCommand(command="help", description="Справка"),
+]
+
 
 async def main():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     settings = get_settings()
+    if not settings.telegram_bot_token:
+        raise SystemExit("TELEGRAM_BOT_TOKEN не задан в .env")
 
     proxy_url = settings.telegram_proxy_url
+    session = AiohttpSession(proxy=proxy_url) if proxy_url else None
 
-    bot_kwargs = {"token": settings.telegram_bot_token}
-    if proxy_url:
-        session = AiohttpSession(proxy=proxy_url)
-        bot_kwargs["session"] = session
-
-    bot = Bot(**bot_kwargs)
+    bot = Bot(
+        token=settings.telegram_bot_token,
+        session=session,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True),
+    )
     dp = Dispatcher()
-
     dp.include_router(router)
 
-    if proxy_url:
-        print(f"[Proxy] {proxy_url}")
-    else:
-        print("[!] Proxy not set — direct connection")
+    logger.info("Proxy: %s", proxy_url or "не задан — прямое подключение")
+    await bot.set_my_commands(COMMANDS)
+    logger.info("Job Sniffer запущен, жду сообщения…")
 
-    print("[Bot] Job Sniffer started. Waiting for messages...")
-
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await bot.session.close()
 
 
 if __name__ == "__main__":

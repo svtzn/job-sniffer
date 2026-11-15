@@ -79,18 +79,24 @@ job-sniffer/
 │   │   ├── subscription.py
 │   │   └── subscription_vacancy.py
 │   │
+│   ├── services/
+│   │   └── search.py        # SearchFilters -> HHQuery -> SearchResult
+│   │
 │   ├── sniffers/
 │   │   ├── base.py
+│   │   ├── schemas.py       # VacancyData, Salary, SearchResult
 │   │   └── hh/
-│   │       ├── sniffer.py
-│   │       ├── parser.py
+│   │       ├── sniffer.py   # пагинация + дедупликация
+│   │       ├── parser.py    # JSON HH-Lux-InitialState, HTML как fallback
 │   │       └── query.py
 │   │
 │   └── telegram/
 │       ├── bot.py
-│       ├── handlers.py
-│       ├── pagination.py
-│       └── formatter.py
+│       ├── handlers.py      # только UI-логика
+│       ├── keyboards.py     # inline-кнопки и CallbackData
+│       ├── formatter.py     # HTML-тексты сообщений
+│       ├── labels.py        # подписи для кодов HH
+│       └── state.py         # состояние чата (в памяти)
 │
 ├── docs/
 │   ├── job-sniffer-technical-specification.md

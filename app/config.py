@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     hh_default_text: str = "Python"
     hh_wait_until: str = "domcontentloaded"
 
+    # --- Search ---
+    search_limit: int = 100  # сколько вакансий собирать за один поиск
+    results_page_size: int = 5  # вакансий на одной странице выдачи в боте
+
     # --- Telegram ---
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""

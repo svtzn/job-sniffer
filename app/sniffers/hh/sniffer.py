@@ -1,59 +1,76 @@
-# app/sniffers/hh/sniffer.py
+import logging
+from dataclasses import replace
 
-from dataclasses import fields
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from app.sniffers.base import BaseSniffer
-from app.sniffers.hh.query import HHQuery
 from app.sniffers.hh.parser import HHParser
-from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+from app.sniffers.hh.query import HHQuery
+from app.sniffers.schemas import SearchResult, VacancyData
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_LIMIT = 100
+# HH не отдаёт больше 2000 результатов (100 страниц), дальше листать бессмысленно
+MAX_PAGES = 100
 
 
 class HHSniffer(BaseSniffer):
 
-    async def fetch_vacancies(self, query: HHQuery) -> list[dict]:
-        all_vacancies: list[dict] = []
-        page = 0
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.parser = HHParser()
 
-        while len(all_vacancies) < 100:
-            page_query = HHQuery(**{
-                field.name: (page if field.name == "page" else getattr(query, field.name))
-                for field in fields(query)
-            })
-            html = await self._fetch_html(page_query)
-            vacancies = HHParser().parse_vacancies(html)
+    async def fetch_vacancies(self, query: HHQuery, limit: int = DEFAULT_LIMIT) -> SearchResult:
+        """Листает выдачу HH, пока не наберёт ``limit`` уникальных вакансий
+        или не кончатся страницы."""
+        base_query = replace(query, base_url=query.base_url or self.config.hh_base_url)
 
-            if not vacancies:
+        collected: list[VacancyData] = []
+        seen_ids: set[str] = set()
+        seen_keys: set[tuple[str, str]] = set()
+        total_found: int | None = None
+        page = base_query.page
+
+        while len(collected) < limit and page < MAX_PAGES:
+            html = await self._fetch_html(replace(base_query, page=page))
+            result = self.parser.parse_page(html)
+            if total_found is None:
+                total_found = result.total_found
+
+            if not result.vacancies:
                 break
 
-            all_vacancies.extend(vacancies)
+            for vacancy in result.vacancies:
+                if not self._is_new(vacancy, seen_ids, seen_keys):
+                    continue
+                collected.append(vacancy)
+                if len(collected) >= limit:
+                    break
+
+            if result.last_page is not None and page >= result.last_page:
+                break
             page += 1
 
-        return self._deduplicate(all_vacancies)
+        logger.info("HH: собрано %s вакансий (всего на HH: %s)", len(collected), total_found)
+        return SearchResult(vacancies=collected, total_found=total_found)
 
-    def _deduplicate(self, vacancies: list[dict]) -> list[dict]:
-        seen: set[tuple[str, ...]] = set()
-        result: list[dict] = []
-
-        for v in vacancies:
-            title = v.get("title", "").lower().strip()
-            if not title:
-                continue
-
-            employer = v.get("employer", "").lower().strip()
-            if employer:
-                key: tuple[str, ...] = (title, employer)
-            else:
-                key = (title,)
-
-            if key in seen:
-                continue
-            seen.add(key)
-            result.append(v)
-
-        return result
+    @staticmethod
+    def _is_new(vacancy: VacancyData, seen_ids: set[str], seen_keys: set[tuple[str, str]]) -> bool:
+        """Дедупликация: по id (рекламные вакансии повторяются на каждой странице)
+        и по паре «название + работодатель» (одна вакансия, размноженная по городам)."""
+        if not vacancy.title or vacancy.id in seen_ids:
+            return False
+        key = (vacancy.title.lower().strip(), (vacancy.employer or "").lower().strip())
+        if key in seen_keys:
+            return False
+        seen_ids.add(vacancy.id)
+        seen_keys.add(key)
+        return True
 
     async def _fetch_html(self, query: HHQuery) -> str:
         url = query.get_url()
+        logger.debug("HH: GET %s", url)
 
         try:
             await self.page.goto(url, wait_until=self.config.hh_wait_until)

@@ -1,34 +1,27 @@
+"""Ручной прогон сниффера без Telegram: python -m app.main"""
+
 import asyncio
-from app.sniffers.hh.sniffer import HHSniffer
-from app.sniffers.hh.query import HHQuery
-from app.config import get_settings
+import logging
+
+from app.services.search import SearchFilters, search_vacancies
+from app.sniffers.hh.query import WorkFormat
+from app.telegram.formatter import format_salary
 
 
 async def main():
-    config = get_settings()
-    sniffer = HHSniffer(config)
+    logging.basicConfig(level=logging.INFO)
+    filters = SearchFilters(text="fastapi", work_formats={WorkFormat.REMOTE}, only_with_salary=True)
 
     try:
-        await sniffer.start()
+        result = await search_vacancies(filters, limit=20)
     except PermissionError as e:
         print(f"[ERROR] Не удалось запустить браузер: {e}")
         print("Проверь: антивирус / групповые политики блокируют subprocess.")
-        print("Запусти из своего терминала — скорее всего сработает.")
         return
 
-    try:
-        query = HHQuery(
-            text='fastapi',
-            work_format='REMOTE',
-            label='with_salary'
-        )
-        vacancies = await sniffer.fetch_vacancies(query)
-        print(f"[DEBUG] Found {len(vacancies)} vacancies")
-
-        for v in vacancies:
-            print(v)
-    finally:
-        await sniffer.stop()
+    print(f"Найдено на HH: {result.total_found}, загружено: {len(result.vacancies)}")
+    for v in result.vacancies:
+        print(f"- {v.title} | {v.employer} | {format_salary(v.salary) or 'з/п не указана'} | {v.url}")
 
 
 if __name__ == "__main__":
