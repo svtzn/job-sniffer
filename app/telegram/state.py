@@ -1,13 +1,15 @@
 """Состояние чата в памяти процесса.
 
 Пока без БД: после перезапуска бота фильтры и последняя выдача теряются.
-Когда появятся модели Subscription/Vacancy, это место заменится репозиторием.
+Когда появятся сохранённые фильтры, SearchFilters будет браться из БД
+(он уже сериализуется через to_dict/from_dict).
 """
 
 from dataclasses import dataclass, field
 
-from app.services.search import SearchFilters
-from app.sniffers.schemas import SearchResult, VacancyData
+from app.services.filters import SearchFilters
+from app.services.search import SearchOutcome
+from app.sniffers.schemas import VacancyData
 
 
 @dataclass
@@ -16,7 +18,7 @@ class ChatSession:
     filters: SearchFilters = field(default_factory=SearchFilters)
 
     # Последняя выдача и фильтры, с которыми она была получена
-    result: SearchResult | None = None
+    result: SearchOutcome | None = None
     result_filters: SearchFilters | None = None
     page: int = 0
     page_size: int = 5
@@ -30,7 +32,7 @@ class ChatSession:
             return 1
         return (len(self.result.vacancies) + self.page_size - 1) // self.page_size
 
-    def set_result(self, result: SearchResult, filters: SearchFilters, message_id: int) -> None:
+    def set_result(self, result: SearchOutcome, filters: SearchFilters, message_id: int) -> None:
         self.result = result
         self.result_filters = filters
         self.results_message_id = message_id

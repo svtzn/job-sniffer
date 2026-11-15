@@ -46,6 +46,13 @@ class SearchField(str, Enum):
     description = "description"
 
 
+class OrderBy(str, Enum):
+    RELEVANCE = "relevance"
+    PUBLICATION_TIME = "publication_time"  # сначала свежие
+    SALARY_DESC = "salary_desc"
+    SALARY_ASC = "salary_asc"
+
+
 @dataclass
 class HHQuery:
     text: str | None = None
@@ -56,6 +63,7 @@ class HHQuery:
     salary: int | None = None
     label: tuple[Label, ...] = ()
     search_field: tuple[SearchField, ...] = ()
+    order_by: OrderBy | None = None
     page: int = 0
     items_on_page: int = 20
 

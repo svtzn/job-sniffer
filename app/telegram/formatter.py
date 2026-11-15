@@ -2,8 +2,9 @@
 
 from html import escape
 
-from app.services.search import SearchFilters
-from app.sniffers.schemas import Salary, SearchResult, VacancyData
+from app.services.filters import LocationRule, SearchFilters
+from app.services.search import SearchOutcome
+from app.sniffers.schemas import Salary, VacancyData
 from app.telegram.labels import (
     CURRENCY_SYMBOLS,
     EMPLOYMENT_LABELS,
@@ -42,19 +43,31 @@ def format_salary(salary: Salary) -> str | None:
     return text
 
 
-def format_filters_summary(filters: SearchFilters) -> str:
-    """Короткая строка вида «Удалённо, Гибрид · 1–3 года · Россия · с ЗП»."""
+def format_location(rule: LocationRule) -> str:
+    """«Россия · Удалённо», «Краснодар · Офис, Гибрид», «Москва · любой формат»."""
+    formats = rule.ordered_work_formats()
+    fmt = ", ".join(WORK_FORMAT_LABELS[f.value] for f in formats) if formats else "любой формат"
+    return f"{rule.area_name} · {fmt}"
+
+
+def format_common_summary(filters: SearchFilters) -> str:
+    """Общая часть фильтра: «Полная · 1–3 года · только с ЗП» или «без доп. условий»."""
     parts: list[str] = []
-    if filters.work_formats:
-        parts.append(", ".join(WORK_FORMAT_LABELS[f.value] for f in sorted(filters.work_formats, key=lambda f: f.value)))
     if filters.employment_forms:
         parts.append(", ".join(EMPLOYMENT_LABELS[e.value] for e in sorted(filters.employment_forms, key=lambda e: e.value)))
     if filters.experiences:
         parts.append(", ".join(EXPERIENCE_LABELS[e.value] for e in sorted(filters.experiences, key=lambda e: e.value)))
-    parts.append(filters.area)
     if filters.only_with_salary:
         parts.append("только с ЗП")
-    return " · ".join(parts)
+    return " · ".join(parts) or "без доп. условий"
+
+
+def _locations_block(filters: SearchFilters) -> str:
+    if len(filters.locations) == 1:
+        return f"📍 {escape(format_location(filters.locations[0]))}"
+    lines = ["📍 Локации (выдача объединяется):"]
+    lines += [f"   {i}. {escape(format_location(r))}" for i, r in enumerate(filters.locations, 1)]
+    return "\n".join(lines)
 
 
 def format_filters_panel(filters: SearchFilters) -> str:
@@ -62,13 +75,23 @@ def format_filters_panel(filters: SearchFilters) -> str:
     return (
         "⚙️ <b>Фильтры поиска</b>\n\n"
         f"🔤 Запрос: {query}\n"
-        f"🎛 {escape(format_filters_summary(filters))}\n\n"
-        "Отметь нужное кнопками и просто отправь мне текст запроса "
-        "(например, <code>python junior</code>) — я поищу с этими фильтрами."
+        f"{_locations_block(filters)}\n"
+        f"🎛 {escape(format_common_summary(filters))}\n\n"
+        "Нажми на локацию, чтобы изменить регион и формат, или добавь ещё одну — "
+        "например, удалёнка по России + офис в своём городе.\n"
+        "Потом просто отправь текст запроса (например, <code>python junior</code>)."
     )
 
 
-def format_vacancy(index: int, v: VacancyData) -> str:
+def format_location_editor(filters: SearchFilters, index: int) -> str:
+    rule = filters.locations[index]
+    return (
+        f"📍 <b>Локация {index + 1}</b>: {escape(format_location(rule))}\n\n"
+        "Выбери регион и форматы работы. Если формат не отмечен — подходит любой."
+    )
+
+
+def format_vacancy(index: int, v: VacancyData, location_labels: list[str] | None = None) -> str:
     title = v.title if len(v.title) <= _MAX_TITLE else v.title[:_MAX_TITLE - 1] + "…"
     lines = [f"<b>{index}. <a href=\"{escape(v.url, quote=True)}\">{escape(title)}</a></b>"]
 
@@ -101,33 +124,53 @@ def format_vacancy(index: int, v: VacancyData) -> str:
     if meta:
         lines.append("📈 " + " · ".join(meta))
 
+    if location_labels:
+        lines.append("🎯 " + escape(" | ".join(location_labels)))
+
     return "\n".join(lines)
 
 
 def format_results_page(
-    result: SearchResult,
+    result: SearchOutcome,
     filters: SearchFilters,
     vacancies: list[VacancyData],
     page: int,
     pages: int,
     page_size: int,
 ) -> str:
+    multi = len(result.locations) > 1
     header = [f"🔍 <b>«{escape(filters.text)}»</b>"]
-    header.append(f"🎛 {escape(format_filters_summary(filters))}")
+    if not multi:
+        header.append(f"📍 {escape(format_location(filters.locations[0]))}")
+    header.append(f"🎛 {escape(format_common_summary(filters))}")
+
+    if multi:
+        header.append("Найдено на HH:")
+        for i, loc in enumerate(result.locations, 1):
+            total = _num(loc.total_found) if loc.total_found is not None else "?"
+            header.append(f"   {i}. {escape(format_location(loc.rule))} — <b>{total}</b>")
 
     if not result.vacancies:
         header.append("")
         header.append("Ничего не нашлось 😔 Попробуй другой запрос или ослабь фильтры.")
         return "\n".join(header)
 
-    found = f"Найдено на HH: <b>{_num(result.total_found)}</b>" if result.total_found else "Найдено"
-    header.append(f"{found} · загружено {len(result.vacancies)}")
+    if multi:
+        header.append(f"Загружено {len(result.vacancies)} без повторов, локации вперемешку")
+    else:
+        found = f"Найдено на HH: <b>{_num(result.total_found)}</b>" if result.total_found else "Найдено"
+        header.append(f"{found} · загружено {len(result.vacancies)}")
     if pages > 1:
         header.append(f"Страница {page + 1}/{pages}")
 
-    cards = [format_vacancy(page * page_size + i, v) for i, v in enumerate(vacancies, 1)]
-    text = "\n".join(header) + "\n\n" + "\n\n".join(cards)
+    cards = []
+    for i, v in enumerate(vacancies, 1):
+        labels = None
+        if multi:
+            labels = [format_location(result.locations[idx].rule) for idx in sorted(result.matched_locations.get(v.id, []))]
+        cards.append(format_vacancy(page * page_size + i, v, labels))
 
+    text = "\n".join(header) + "\n\n" + "\n\n".join(cards)
     if len(text) > TELEGRAM_LIMIT:  # страховка; при 5 карточках на страницу не срабатывает
         text = text[:TELEGRAM_LIMIT - 1] + "…"
     return text

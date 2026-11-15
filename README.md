@@ -80,7 +80,8 @@ job-sniffer/
 │   │   └── subscription_vacancy.py
 │   │
 │   ├── services/
-│   │   └── search.py        # SearchFilters -> HHQuery -> SearchResult
+│   │   ├── filters.py       # SearchFilters + LocationRule, (де)сериализация
+│   │   └── search.py        # запрос на каждую локацию -> склейка -> SearchOutcome
 │   │
 │   ├── sniffers/
 │   │   ├── base.py
@@ -123,7 +124,15 @@ The first working prototype currently supports:
 
 ### Current filters
 
-Work format:
+Locations (multi-location search). A filter holds up to 4 locations,
+each is "area + work formats"; results of all locations are merged
+without duplicates and interleaved (freshest first within each location). Example:
+- Russia · Remote
+- Krasnodar · On-site, Hybrid
+
+One-tap preset "Remote + my city" (`HOME_AREA_ID` in `.env`).
+
+Work format (per location):
 - Remote
 - Hybrid
 - On-site
@@ -131,6 +140,10 @@ Work format:
 Employment:
 - Full-time
 - Part-time
+- Project
+
+Salary:
+- Only with salary
 
 Experience:
 - No experience
@@ -153,8 +166,8 @@ Experience:
 ### Phase 2 — Search Engine
 
 - [ ] Advanced filters
-- [ ] Multi-filter search
-- [ ] Location-aware filters
+- [x] Multi-filter search (merged multi-location results)
+- [x] Location-aware filters
 - [ ] Custom search presets
 
 ### Phase 3 — Persistence

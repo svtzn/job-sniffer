@@ -3,6 +3,7 @@
 
 Сценарий:
   /start или /filters  -> панель фильтров (inline-кнопки)
+                          локации: «регион + формат», выдача — их объединение
   любой текст          -> поиск по этому тексту с текущими фильтрами
   /search [текст]      -> то же самое; без текста — повтор последнего запроса
   выдача               -> ◀️ 2/20 ▶️, 🔄 Обновить, ⚙️ Фильтры
@@ -16,15 +17,23 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject, CommandStart
 
 from app.config import get_settings
-from app.services.search import SearchFilters, search_is_busy, search_vacancies
+from app.services.filters import MAX_LOCATIONS, LocationRule, SearchFilters
+from app.services.search import search_is_busy, search_vacancies
 from app.sniffers.hh.query import EmploymentForm, Experience, WorkFormat
-from app.telegram.formatter import format_error, format_filters_panel, format_results_page
+from app.telegram.formatter import (
+    format_error,
+    format_filters_panel,
+    format_location_editor,
+    format_results_page,
+)
 from app.telegram.keyboards import (
     ActionCb,
     FilterCb,
+    LocCb,
     PageCb,
+    decode_area,
     filters_keyboard,
-    next_area,
+    location_editor_keyboard,
     results_keyboard,
 )
 from app.telegram.state import ChatSession, get_session
@@ -34,7 +43,8 @@ router = Router()
 
 HELP_TEXT = (
     "🐽 <b>Job Sniffer</b> — поиск вакансий на HH.ru\n\n"
-    "1. Настрой фильтры кнопками (/filters)\n"
+    "1. Настрой фильтры кнопками (/filters). Можно задать несколько локаций — "
+    "например, удалёнка по России + офис в своём городе, выдача будет общей\n"
     "2. Отправь текст запроса, например <code>python backend</code>\n"
     "3. Листай выдачу кнопками ◀️ ▶️\n\n"
     "<b>Команды</b>\n"
@@ -46,6 +56,10 @@ HELP_TEXT = (
 
 def _session(chat_id: int) -> ChatSession:
     return get_session(chat_id, page_size=get_settings().results_page_size)
+
+
+def _home_area_id() -> int:
+    return get_settings().home_area_id
 
 
 async def _safe_edit(message: types.Message, text: str, reply_markup=None) -> None:
@@ -77,8 +91,9 @@ async def _run_search(message: types.Message, session: ChatSession, filters: Sea
 
     session.searching = True
     queue_note = "\n(другой поиск уже идёт — ты следующий в очереди)" if search_is_busy() else ""
+    where = f" по {len(filters.locations)} локациям" if len(filters.locations) > 1 else ""
     status = await message.answer(
-        f"⏳ Ищу «{filters.text}» на HH… обычно это 10–40 секунд.{queue_note}",
+        f"⏳ Ищу «{filters.text}» на HH{where}… обычно это 10–40 секунд.{queue_note}",
         parse_mode=None,
     )
     try:
@@ -96,7 +111,27 @@ async def _run_search(message: types.Message, session: ChatSession, filters: Sea
 
 
 async def _send_filters_panel(message: types.Message, session: ChatSession) -> None:
-    await message.answer(format_filters_panel(session.filters), reply_markup=filters_keyboard(session.filters))
+    await message.answer(
+        format_filters_panel(session.filters),
+        reply_markup=filters_keyboard(session.filters, _home_area_id()),
+    )
+
+
+async def _show_filters_panel(message: types.Message, session: ChatSession) -> None:
+    """Перерисовать панель фильтров в том же сообщении."""
+    await _safe_edit(
+        message,
+        format_filters_panel(session.filters),
+        reply_markup=filters_keyboard(session.filters, _home_area_id()),
+    )
+
+
+async def _show_location_editor(message: types.Message, session: ChatSession, index: int) -> None:
+    await _safe_edit(
+        message,
+        format_location_editor(session.filters, index),
+        reply_markup=location_editor_keyboard(session.filters, index, _home_area_id()),
+    )
 
 
 # ---------------------------------------------------------------- commands
@@ -141,10 +176,10 @@ async def handle_unknown_command(message: types.Message):
     await message.answer("Не знаю такую команду. /help — список команд.")
 
 
-# ---------------------------------------------------------------- filters
+# ---------------------------------------------------------------- filters (общая часть)
 
-_ENUMS = {"wf": WorkFormat, "emp": EmploymentForm, "exp": Experience}
-_SETS = {"wf": "work_formats", "emp": "employment_forms", "exp": "experiences"}
+_ENUMS = {"emp": EmploymentForm, "exp": Experience}
+_SETS = {"emp": "employment_forms", "exp": "experiences"}
 
 
 @router.callback_query(FilterCb.filter())
@@ -160,12 +195,62 @@ async def on_filter(callback: types.CallbackQuery, callback_data: FilterCb):
             return
         selected: set = getattr(filters, _SETS[callback_data.group])
         selected.symmetric_difference_update({value})
-    elif callback_data.group == "area":
-        filters.area = next_area(filters.area)
     elif callback_data.group == "salary":
         filters.only_with_salary = not filters.only_with_salary
 
-    await _safe_edit(callback.message, format_filters_panel(filters), reply_markup=filters_keyboard(filters))
+    await _show_filters_panel(callback.message, session)
+    await callback.answer()
+
+
+# ---------------------------------------------------------------- локации
+
+@router.callback_query(LocCb.filter())
+async def on_location(callback: types.CallbackQuery, callback_data: LocCb):
+    session = _session(callback.message.chat.id)
+    filters = session.filters
+    action, idx = callback_data.action, callback_data.idx
+
+    if action == "add":
+        new_idx = filters.add_location(LocationRule(area_id=_home_area_id()))
+        if new_idx is None:
+            await callback.answer(f"Больше {MAX_LOCATIONS} локаций не поддерживается", show_alert=True)
+            return
+        await _show_location_editor(callback.message, session, new_idx)
+        await callback.answer()
+        return
+
+    if action == "preset":
+        filters.apply_remote_plus_home(_home_area_id())
+        await _show_filters_panel(callback.message, session)
+        await callback.answer("Готово: удалёнка по России + офис/гибрид в твоём городе")
+        return
+
+    if action == "done":
+        await _show_filters_panel(callback.message, session)
+        await callback.answer()
+        return
+
+    # дальше — действия над конкретной локацией; индекс мог устареть
+    if not 0 <= idx < len(filters.locations):
+        await _show_filters_panel(callback.message, session)
+        await callback.answer("Эта локация уже удалена")
+        return
+    rule = filters.locations[idx]
+
+    if action == "del":
+        filters.remove_location(idx)
+        await _show_filters_panel(callback.message, session)
+        await callback.answer("Локация удалена")
+        return
+
+    if action == "area":
+        with suppress(ValueError):
+            rule.area_id = decode_area(callback_data.value)
+    elif action == "wf":
+        with suppress(ValueError):
+            rule.work_formats.symmetric_difference_update({WorkFormat(callback_data.value)})
+
+    await _show_location_editor(callback.message, session, idx)
     await callback.answer()
 
 
@@ -190,9 +275,7 @@ async def on_search(callback: types.CallbackQuery):
 async def on_reset(callback: types.CallbackQuery):
     session = _session(callback.message.chat.id)
     session.filters = SearchFilters()
-    await _safe_edit(
-        callback.message, format_filters_panel(session.filters), reply_markup=filters_keyboard(session.filters)
-    )
+    await _show_filters_panel(callback.message, session)
     await callback.answer("Фильтры сброшены")
 
 

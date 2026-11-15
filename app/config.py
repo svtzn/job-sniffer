@@ -25,16 +25,15 @@ class Settings(BaseSettings):
 
     # --- HH.ru ---
     hh_base_url: str = "https://krasnodar.hh.ru/search/vacancy"
-    hh_default_text: str = "Python"
     hh_wait_until: str = "domcontentloaded"
 
     # --- Search ---
     search_limit: int = 100  # сколько вакансий собирать за один поиск
     results_page_size: int = 5  # вакансий на одной странице выдачи в боте
+    home_area_id: int = 53  # «мой город» для шаблона «удалёнка + мой город» (53 — Краснодар)
 
     # --- Telegram ---
     telegram_bot_token: str = ""
-    telegram_chat_id: str = ""
     telegram_proxy_url: str = ""
 
 
