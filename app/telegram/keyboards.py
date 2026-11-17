@@ -30,9 +30,32 @@ class PageCb(CallbackData, prefix="p"):
 
 
 class SavedCb(CallbackData, prefix="s"):
-    # save | update | save_new | list | run | edit | del | del_yes | rename | rename_cancel
+    # save | update | save_new | list | run | edit | del | del_yes | rename | rename_cancel | sub | unsub
     action: str
     id: int = 0
+
+
+class HideCb(CallbackData, prefix="h"):
+    vacancy: int  # id вакансии в БД
+
+
+def notification_keyboard(url: str, vacancy_db_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🔗 Открыть", url=url),
+                _btn("🙈 Не интересно", HideCb(vacancy=vacancy_db_id)),
+            ]
+        ]
+    )
+
+
+def hidden_keyboard(url: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔗 Открыть", url=url)]])
+
+
+def cancel_input_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[_btn("Отмена", ActionCb(action="cancel_input"))]])
 
 
 def _btn(text: str, cb: CallbackData) -> InlineKeyboardButton:
@@ -74,7 +97,13 @@ def filters_keyboard(filters: SearchFilters, home_area_id: int, loaded_id: int |
         for e in Experience
     ]
     rows.extend(_chunks(exp_buttons, 2))
-    rows.append([_toggle("Только с ЗП", filters.only_with_salary, FilterCb(group="salary"))])
+    exclude = f"🚫 Исключить ({len(filters.exclude_words)})" if filters.exclude_words else "🚫 Исключить слова"
+    rows.append(
+        [
+            _toggle("Только с ЗП", filters.only_with_salary, FilterCb(group="salary")),
+            _btn(exclude, FilterCb(group="exclude")),
+        ]
+    )
     rows.append(
         [
             _btn("🔍 Искать", ActionCb(action="search")),
@@ -100,10 +129,14 @@ def filters_keyboard(filters: SearchFilters, home_area_id: int, loaded_id: int |
 def saved_list_keyboard(items: list[SavedFilterInfo]) -> InlineKeyboardMarkup:
     rows = []
     for i, item in enumerate(items, 1):
-        name = item.name if len(item.name) <= 28 else item.name[:27] + "…"
+        name = item.name if len(item.name) <= 22 else item.name[:21] + "…"
         rows.append(
             [
                 _btn(f"▶️ {i}. {name}", SavedCb(action="run", id=item.id)),
+                _btn(
+                    "🔔" if item.is_subscribed else "🔕",
+                    SavedCb(action="unsub" if item.is_subscribed else "sub", id=item.id),
+                ),
                 _btn("✏️", SavedCb(action="edit", id=item.id)),
                 _btn("🗑", SavedCb(action="del", id=item.id)),
             ]

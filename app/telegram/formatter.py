@@ -61,6 +61,8 @@ def format_common_summary(filters: SearchFilters) -> str:
         parts.append(", ".join(EXPERIENCE_LABELS[e.value] for e in sorted(filters.experiences, key=lambda e: e.value)))
     if filters.only_with_salary:
         parts.append("только с ЗП")
+    if filters.exclude_words:
+        parts.append("без: " + ", ".join(filters.exclude_words))
     return " · ".join(parts) or "без доп. условий"
 
 
@@ -103,9 +105,13 @@ def format_saved_list(items: list[SavedFilterInfo]) -> str:
     for i, item in enumerate(items, 1):
         f = item.filters
         where = format_location(f.locations[0]) if len(f.locations) == 1 else f"{len(f.locations)} локации"
-        lines.append(f"{i}. <b>{escape(item.name)}</b>")
+        bell = " 🔔" if item.is_subscribed else ""
+        lines.append(f"{i}. <b>{escape(item.name)}</b>{bell}")
         lines.append(f"   «{escape(f.text)}» · {escape(where)} · {escape(format_common_summary(f))}")
-    lines += ["", "▶️ — искать, ✏️ — открыть в панели фильтров, 🗑 — удалить"]
+    lines += [
+        "",
+        "▶️ — искать, 🔔/🔕 — подписка на новые вакансии, ✏️ — открыть в панели, 🗑 — удалить",
+    ]
     return "\n".join(lines)
 
 
@@ -125,9 +131,10 @@ def format_location_editor(filters: SearchFilters, index: int) -> str:
     )
 
 
-def format_vacancy(index: int, v: VacancyData, location_labels: list[str] | None = None) -> str:
+def format_vacancy(index: int | None, v: VacancyData, location_labels: list[str] | None = None) -> str:
     title = v.title if len(v.title) <= _MAX_TITLE else v.title[: _MAX_TITLE - 1] + "…"
-    lines = [f'<b>{index}. <a href="{escape(v.url, quote=True)}">{escape(title)}</a></b>']
+    number = f"{index}. " if index is not None else ""
+    lines = [f'<b>{number}<a href="{escape(v.url, quote=True)}">{escape(title)}</a></b>']
 
     salary = format_salary(v.salary)
     lines.append(f"💰 {escape(salary)}" if salary else "💰 <i>з/п не указана</i>")
@@ -196,6 +203,8 @@ def format_results_page(
     else:
         found = f"Найдено на HH: <b>{_num(result.total_found)}</b>" if result.total_found else "Найдено"
         header.append(f"{found} · загружено {len(result.vacancies)}")
+    if result.excluded:
+        header.append(f"🚫 Скрыто по исключённым словам: {result.excluded}")
     if pages > 1:
         header.append(f"Страница {page + 1}/{pages}")
 
@@ -218,3 +227,63 @@ def format_error(error: Exception) -> str:
     if len(text) > 500:
         text = text[:500] + "…"
     return f"❌ Не получилось выполнить поиск:\n<code>{escape(text)}</code>\n\nПопробуй ещё раз чуть позже."
+
+
+# ---------------------------------------------------------------- подписки
+
+
+def format_exclude_prompt(filters: SearchFilters) -> str:
+    current = ", ".join(filters.exclude_words) if filters.exclude_words else "нет"
+    return (
+        "🚫 <b>Исключить слова</b>\n\n"
+        "Вакансии, в названии которых есть любое из этих слов, не попадут в выдачу и подписки.\n"
+        f"Сейчас: <i>{escape(current)}</i>\n\n"
+        "Отправь слова через запятую, например <code>senior, lead, 1С, стажёр</code>.\n"
+        "Отправь <code>-</code>, чтобы очистить список."
+    )
+
+
+def format_subscription_on(name: str, interval_minutes: int) -> str:
+    return (
+        f"🔔 Подписка на <b>{escape(name)}</b> включена.\n\n"
+        f"Проверяю каждые {interval_minutes} мин. Сейчас запомню текущую выдачу — "
+        "присылать буду только то, что появится после этого."
+    )
+
+
+def format_notification(v: VacancyData, filter_names: list[str]) -> str:
+    text = "🔥 <b>Новая вакансия</b>\n\n" + format_vacancy(None, v)
+    if filter_names:
+        text += "\n\n🎯 Подходит: " + escape(", ".join(filter_names))
+    return text
+
+
+def format_digest(items: list[tuple[VacancyData, list[str]]]) -> str:
+    """Сводка, когда новых вакансий много (или накопились за тихие часы)."""
+    header = f"🔥 <b>Новых вакансий: {len(items)}</b>\n"
+    lines: list[str] = []
+    length = len(header)
+    previous_filters: list[str] | None = None
+    for shown, (v, filter_names) in enumerate(items):
+        line = f'• <a href="{escape(v.url, quote=True)}">{escape(v.title[:_MAX_TITLE])}</a>'
+        if v.employer:
+            line += f" — {escape(v.employer)}"
+        salary = format_salary(v.salary)
+        if salary:
+            line += f" · {escape(salary)}"
+        if filter_names != previous_filters:
+            line += f"\n   🎯 {escape(', '.join(filter_names))}"
+            previous_filters = filter_names
+        if length + len(line) + 60 > TELEGRAM_LIMIT:
+            lines.append(f"\n…и ещё {len(items) - shown}")
+            break
+        lines.append(line)
+        length += len(line) + 1
+    return header + "\n".join(lines)
+
+
+def format_hh_unavailable(name: str) -> str:
+    return (
+        f"⚠️ Не получается проверить подписку <b>{escape(name)}</b> — HH не отвечает "
+        "несколько раз подряд. Продолжу пробовать и напишу, когда появятся новые вакансии."
+    )

@@ -35,6 +35,7 @@ class SearchOutcome:
     locations: list[LocationOutcome]
     # vacancy.id -> индексы локаций (в filters.locations), под которые она попала
     matched_locations: dict[str, list[int]] = field(default_factory=dict)
+    excluded: int = 0  # сколько отброшено по «исключить слова»
 
     @property
     def total_found(self) -> int | None:
@@ -69,13 +70,15 @@ def search_is_busy() -> bool:
     return _browser_lock.locked()
 
 
-async def search_vacancies(filters: SearchFilters, limit: int | None = None) -> SearchOutcome:
+async def search_vacancies(
+    filters: SearchFilters, limit: int | None = None, newest_first: bool = False
+) -> SearchOutcome:
     if not filters.text.strip():
         raise ValueError("Пустой поисковый запрос")
 
     settings = get_settings()
     limit = limit or settings.search_limit
-    queries = filters.to_hh_queries()
+    queries = filters.to_hh_queries(newest_first=newest_first)
     # общий бюджет делится между локациями, чтобы 2 локации не искались вдвое дольше
     per_location = max(1, math.ceil(limit / len(queries)))
 
@@ -89,7 +92,13 @@ async def search_vacancies(filters: SearchFilters, limit: int | None = None) -> 
             outcomes.append(LocationOutcome(rule, result.total_found, len(result.vacancies)))
 
     vacancies, matched = merge_results(per_rule)
-    return SearchOutcome(vacancies=vacancies, locations=outcomes, matched_locations=matched)
+    kept = [v for v in vacancies if not filters.is_excluded(v.title)]
+    return SearchOutcome(
+        vacancies=kept,
+        locations=outcomes,
+        matched_locations={v.id: matched[v.id] for v in kept},
+        excluded=len(vacancies) - len(kept),
+    )
 
 
 def merge_results(per_rule: list[list[VacancyData]]) -> tuple[list[VacancyData], dict[str, list[int]]]:

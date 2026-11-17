@@ -35,3 +35,8 @@ async def delete_one(session: AsyncSession, chat_id: int, filter_id: int) -> boo
     stmt = delete(SavedFilter).where(SavedFilter.id == filter_id, SavedFilter.chat_id == chat_id)
     result = await session.execute(stmt)
     return result.rowcount > 0
+
+
+async def list_subscribed(session: AsyncSession) -> list[SavedFilter]:
+    stmt = select(SavedFilter).where(SavedFilter.is_subscribed.is_(True)).order_by(SavedFilter.chat_id, SavedFilter.id)
+    return list(await session.scalars(stmt))

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from app.db.session import get_sessionmaker
 from app.models import SavedFilter
+from app.repositories import filter_vacancies as filter_vacancies_repo
 from app.repositories import saved_filters as repo
 from app.services.filters import SearchFilters
 
@@ -65,7 +66,13 @@ async def update_filters(chat_id: int, filter_id: int, filters: SearchFilters) -
         saved = await repo.get(session, chat_id, filter_id)
         if saved is None:
             return None
-        saved.params = filters.to_dict()
+        new_params = filters.to_dict()
+        if SearchFilters.from_dict(saved.params).to_dict() != new_params:
+            saved.params = new_params
+            # Фильтр изменился — для подписки это новый поиск: следующая проверка снова
+            # «тихая» (только запоминает выдачу), иначе пришла бы пачка старых вакансий.
+            saved.last_checked_at = None
+            await filter_vacancies_repo.drop_pending(session, saved.id)
         await session.flush()
         return _info(saved)
 

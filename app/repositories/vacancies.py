@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import utcnow
 from app.models import FilterVacancy, Vacancy
+from app.models.filter_vacancy import STATUS_SEEN
 from app.repositories.upsert import insert_for
 from app.sniffers.schemas import VacancyData
 
@@ -89,7 +90,7 @@ async def mark_seen(session: AsyncSession, filter_id: int, vacancy_ids: list[int
         insert(FilterVacancy)
         .values(
             [
-                {"filter_id": filter_id, "vacancy_id": vid, "first_seen_at": now, "hidden": False}
+                {"filter_id": filter_id, "vacancy_id": vid, "first_seen_at": now, "status": STATUS_SEEN}
                 for vid in set(vacancy_ids)
             ]
         )

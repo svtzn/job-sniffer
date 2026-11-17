@@ -33,6 +33,9 @@ that the HH website itself can't combine — for example, *remote jobs anywhere 
 - 💰 Accurate salary data (from/to, currency, gross/net) from HH's embedded page state
 - 📄 Paginated results with deduplication across pages and locations
 - 💾 Saved filters: save, rename, run, edit, delete (`/myfilters`)
+- 🔔 Subscriptions: new vacancies for saved filters arrive automatically, without duplicates
+- 🚫 Exclude words (senior, lead, 1С …) for search results and subscriptions
+- 🌙 Quiet hours and digests instead of message floods
 - 🗃️ Every search result is stored in a local SQLite database
 - 🌐 Telegram proxy support
 
@@ -40,7 +43,12 @@ that the HH website itself can't combine — for example, *remote jobs anywhere 
 
 ## 🚀 Quick Start
 
-Requirements: Python 3.12+, [uv](https://docs.astral.sh/uv/), a Telegram bot token from [@BotFather](https://t.me/BotFather).
+Requirements: Windows, [uv](https://docs.astral.sh/uv/), a Telegram bot token from [@BotFather](https://t.me/BotFather).
+
+**Windows:** double-click `start.bat`. On the first run it installs dependencies and Chromium,
+creates `.env` and opens it so you can paste `TELEGRAM_BOT_TOKEN`; next runs just start the bot.
+
+**Manually** (any OS):
 
 ```bash
 uv sync
@@ -50,13 +58,14 @@ uv sync
 uv run playwright install chromium
 ```
 
-Copy `.env.example` to `.env` and set `TELEGRAM_BOT_TOKEN` (see [Configuration](#️-configuration)), then start the bot:
+Copy `.env.example` to `.env`, set `TELEGRAM_BOT_TOKEN` (see [Configuration](#️-configuration)), then:
 
 ```bash
-uv run python -m app.telegram.bot
+uv run job-sniffer
 ```
 
-Database migrations are applied automatically on startup.
+Database migrations are applied automatically on startup. If Telegram is reachable only via VPN/proxy,
+set `TELEGRAM_PROXY_URL`.
 
 ---
 
@@ -67,10 +76,14 @@ Database migrations are applied automatically on startup.
 | `/start` | Help and the filter panel |
 | `/filters` | Filter panel: locations, experience, employment, salary |
 | `/search <text>` | Search with current filters (without text — repeat the last query) |
-| `/myfilters` | Saved filters |
+| `/myfilters` | Saved filters: run ▶️, subscribe 🔔/🔕, edit ✏️, delete 🗑 |
 | `/help` | Help |
 
 Any plain text message is treated as a search query with the current filters.
+
+**Subscriptions.** Turn on 🔔 for a saved filter and the bot checks HH every few minutes. The first check
+only remembers current vacancies; after that only new ones are sent, each once, even if it matches several
+filters. Too many at once → one digest. "🙈 Not interested" hides a vacancy.
 
 ---
 
@@ -89,6 +102,9 @@ All settings live in `.env` (see `.env.example`). Empty values fall back to defa
 | `SEARCH_LIMIT` | `100` | Max vacancies collected per search |
 | `RESULTS_PAGE_SIZE` | `5` | Vacancies per page in the bot |
 | `HOME_AREA_ID` | `53` | HH area id for the "Remote + my city" preset (53 — Krasnodar, 1 — Moscow, 2 — St. Petersburg) |
+| `SUBSCRIPTION_INTERVAL_MINUTES` | `15` | How often subscriptions are checked |
+| `SUBSCRIPTION_MAX_PER_CHECK` | `10` | More new vacancies at once are sent as one digest |
+| `QUIET_HOURS` | — | e.g. `23-8`: no messages at night, a digest in the morning (local time) |
 
 Browser fingerprint settings (`VIEWPORT_*`, `LOCALE`, `TIMEZONE_ID`, `HH_WAIT_UNTIL`) rarely need changes.
 
@@ -128,23 +144,27 @@ job-sniffer/
 │   ├── services/               # business logic, independent of Telegram
 │   │   ├── filters.py          # SearchFilters, LocationRule
 │   │   ├── search.py           # one request per location -> merged result
-│   │   └── saved_filters.py    # saved filters CRUD
+│   │   ├── saved_filters.py    # saved filters CRUD
+│   │   └── subscriptions.py    # new-vacancy detection, notification queue, quiet hours
 │   │
 │   ├── db/                     # engine, session, types, migrations runner
 │   ├── models/                 # Vacancy, SavedFilter, FilterVacancy
 │   ├── repositories/           # all SQL lives here
 │   │
 │   └── telegram/
-│       ├── bot.py              # entry point
+│       ├── bot.py              # entry point (`uv run job-sniffer`)
+│       ├── notifier.py         # background subscription worker
 │       ├── handlers.py         # UI logic only
 │       ├── keyboards.py        # inline keyboards, CallbackData
 │       ├── formatter.py        # message texts (HTML)
 │       ├── labels.py           # human-readable HH codes
 │       └── state.py            # per-chat state in memory
 │
+├── tests/                      # pytest
 ├── alembic/                    # migrations
 ├── alembic.ini
 ├── .env.example
+├── start.bat                   # quick start on Windows
 └── pyproject.toml
 ```
 
@@ -161,6 +181,20 @@ uv run alembic upgrade head
 ```bash
 uv run alembic revision --autogenerate -m "describe change"
 ```
+
+---
+
+## 🧪 Development
+
+```bash
+uv run pytest
+```
+
+```bash
+uvx ruff check app tests
+```
+
+Tests use a temporary SQLite database, a fake HH search and a fake Telegram network — nothing leaves the machine.
 
 ---
 

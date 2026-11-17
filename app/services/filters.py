@@ -29,6 +29,7 @@ AREAS: dict[int | None, str] = {
 }
 RUSSIA_AREA_ID = 113
 MAX_LOCATIONS = 4
+MAX_EXCLUDE_WORDS = 30
 
 _WORK_FORMAT_ORDER = [WorkFormat.REMOTE, WorkFormat.HYBRID, WorkFormat.ON_SITE, WorkFormat.FIELD_WORK]
 
@@ -75,6 +76,8 @@ class SearchFilters:
     experiences: set[Experience] = field(default_factory=set)
     only_with_salary: bool = False
     locations: list[LocationRule] = field(default_factory=lambda: [LocationRule()])
+    # Вакансия отбрасывается, если в названии есть любое из слов (без учёта регистра)
+    exclude_words: list[str] = field(default_factory=list)
 
     def copy(self) -> "SearchFilters":
         return SearchFilters.from_dict(self.to_dict())
@@ -104,17 +107,31 @@ class SearchFilters:
             LocationRule(area_id=home_area_id, work_formats={WorkFormat.ON_SITE, WorkFormat.HYBRID}),
         ]
 
+    # ---- исключения
+
+    def set_exclude_words(self, raw: str) -> None:
+        """«senior, lead;1С» -> ['senior', 'lead', '1с'] (без пустых и повторов, порядок сохраняется)."""
+        words = [w.strip().lower() for w in raw.replace(";", ",").replace("\n", ",").split(",")]
+        self.exclude_words = list(dict.fromkeys(w for w in words if w))[:MAX_EXCLUDE_WORDS]
+
+    def is_excluded(self, title: str) -> bool:
+        title = title.lower()
+        return any(word in title for word in self.exclude_words)
+
     # ---- запросы к HH
 
-    def to_hh_queries(self) -> list[HHQuery]:
-        """Один HHQuery на каждую локацию, в том же порядке, что и self.locations."""
+    def to_hh_queries(self, newest_first: bool = False) -> list[HHQuery]:
+        """Один HHQuery на каждую локацию, в том же порядке, что и self.locations.
+
+        newest_first — сортировка по дате публикации (подписки смотрят только свежее).
+        """
         common = dict(
             text=self.text.strip() or None,
             employment_form=_sorted(self.employment_forms),
             experience=_sorted(self.experiences),
             label=(Label.with_salary,) if self.only_with_salary else (),
             # при объединении нескольких выдач честно сравнивать можно только по дате
-            order_by=OrderBy.PUBLICATION_TIME if len(self.locations) > 1 else None,
+            order_by=OrderBy.PUBLICATION_TIME if newest_first or len(self.locations) > 1 else None,
         )
         return [HHQuery(area=rule.area_id, work_format=_sorted(rule.work_formats), **common) for rule in self.locations]
 
@@ -127,6 +144,7 @@ class SearchFilters:
             "experiences": [e.value for e in _sorted(self.experiences)],
             "only_with_salary": self.only_with_salary,
             "locations": [rule.to_dict() for rule in self.locations],
+            "exclude_words": list(self.exclude_words),
         }
 
     @classmethod
@@ -138,4 +156,5 @@ class SearchFilters:
             experiences={Experience(v) for v in data.get("experiences") or []},
             only_with_salary=bool(data.get("only_with_salary")),
             locations=locations or [LocationRule()],
+            exclude_words=[str(w) for w in data.get("exclude_words") or []],
         )

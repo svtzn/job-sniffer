@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     results_page_size: int = 5  # вакансий на одной странице выдачи в боте
     home_area_id: int = 53  # «мой город» для шаблона «удалёнка + мой город» (53 — Краснодар)
 
+    # --- Subscriptions ---
+    subscription_interval_minutes: int = 15  # как часто проверять подписки
+    subscription_max_per_check: int = 10  # больше новых за раз — одна сводка вместо карточек
+    quiet_hours: str = ""  # «23-8»: ночью не присылать, утром — сводкой (локальное время)
+
     # --- Telegram ---
     telegram_bot_token: str = ""
     telegram_proxy_url: str = ""

@@ -20,7 +20,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 from app.config import get_settings
-from app.services import saved_filters
+from app.services import saved_filters, subscriptions
 from app.services.filters import MAX_LOCATIONS, LocationRule, SearchFilters
 from app.services.search import search_and_store, search_is_busy
 from app.sniffers.hh.query import EmploymentForm, Experience, WorkFormat
@@ -28,27 +28,33 @@ from app.telegram.formatter import (
     default_filter_name,
     format_delete_confirm,
     format_error,
+    format_exclude_prompt,
     format_filters_panel,
     format_location_editor,
     format_rename_prompt,
     format_results_page,
     format_saved_list,
+    format_subscription_on,
 )
 from app.telegram.keyboards import (
     ActionCb,
     FilterCb,
+    HideCb,
     LocCb,
     PageCb,
     SavedCb,
+    cancel_input_keyboard,
     decode_area,
     delete_confirm_keyboard,
     filters_keyboard,
+    hidden_keyboard,
     location_editor_keyboard,
     rename_cancel_keyboard,
     results_keyboard,
     saved_done_keyboard,
     saved_list_keyboard,
 )
+from app.telegram.notifier import SubscriptionWorker
 from app.telegram.state import ChatSession, LoadedFilter, get_session
 
 logger = logging.getLogger(__name__)
@@ -59,15 +65,20 @@ class RenameStates(StatesGroup):
     waiting_name = State()  # в data: filter_id
 
 
+class ExcludeStates(StatesGroup):
+    waiting_words = State()
+
+
 HELP_TEXT = (
     "🐽 <b>Job Sniffer</b> — поиск вакансий на HH.ru\n\n"
     "1. Настрой фильтры кнопками (/filters). Можно задать несколько локаций — "
     "например, удалёнка по России + офис в своём городе, выдача будет общей\n"
     "2. Отправь текст запроса, например <code>python backend</code>\n"
-    "3. Листай выдачу кнопками ◀️ ▶️\n\n"
+    "3. Листай выдачу кнопками ◀️ ▶️\n"
+    "4. Сохрани фильтр (💾) и включи подписку (🔔 в /myfilters) — новые вакансии придут сами\n\n"
     "<b>Команды</b>\n"
     "/filters — фильтры поиска\n"
-    "/myfilters — сохранённые фильтры\n"
+    "/myfilters — сохранённые фильтры и подписки\n"
     "/search <i>текст</i> — искать (без текста — повторить последний запрос)\n"
     "/help — эта справка"
 )
@@ -230,6 +241,17 @@ async def handle_rename_text(message: types.Message, state: FSMContext):
     await message.answer(f"✅ Переименовано: <b>{escape(info.name)}</b>", reply_markup=saved_done_keyboard(info.id))
 
 
+@router.message(StateFilter(ExcludeStates.waiting_words), F.text & ~F.text.startswith("/"))
+async def handle_exclude_text(message: types.Message, state: FSMContext):
+    await state.clear()
+    session = _session(message.chat.id)
+    raw = message.text.strip()
+    session.filters.set_exclude_words("" if raw == "-" else raw)
+    words = ", ".join(session.filters.exclude_words) or "список пуст"
+    await message.answer(f"🚫 Исключаю: <i>{escape(words)}</i>")
+    await _send_filters_panel(message, session)
+
+
 @router.message(F.text & ~F.text.startswith("/"))
 async def handle_query_text(message: types.Message):
     session = _session(message.chat.id)
@@ -249,9 +271,15 @@ _SETS = {"emp": "employment_forms", "exp": "experiences"}
 
 
 @router.callback_query(FilterCb.filter())
-async def on_filter(callback: types.CallbackQuery, callback_data: FilterCb):
+async def on_filter(callback: types.CallbackQuery, callback_data: FilterCb, state: FSMContext):
     session = _session(callback.message.chat.id)
     filters = session.filters
+
+    if callback_data.group == "exclude":
+        await state.set_state(ExcludeStates.waiting_words)
+        await callback.answer()
+        await callback.message.answer(format_exclude_prompt(filters), reply_markup=cancel_input_keyboard())
+        return
 
     if callback_data.group in _ENUMS:
         try:
@@ -326,6 +354,13 @@ async def on_location(callback: types.CallbackQuery, callback_data: LocCb):
 
 @router.callback_query(ActionCb.filter(F.action == "noop"))
 async def on_noop(callback: types.CallbackQuery):
+    await callback.answer()
+
+
+@router.callback_query(ActionCb.filter(F.action == "cancel_input"))
+async def on_cancel_input(callback: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await _safe_edit(callback.message, "Отменено.")
     await callback.answer()
 
 
@@ -478,6 +513,38 @@ async def on_saved_rename(callback: types.CallbackQuery, callback_data: SavedCb,
     await state.update_data(filter_id=info.id)
     await callback.answer()
     await callback.message.answer(format_rename_prompt(info), reply_markup=rename_cancel_keyboard())
+
+
+@router.callback_query(SavedCb.filter(F.action.in_({"sub", "unsub"})))
+async def on_subscription_toggle(callback: types.CallbackQuery, callback_data: SavedCb, worker: SubscriptionWorker):
+    chat_id = callback.message.chat.id
+    enable = callback_data.action == "sub"
+    result = await subscriptions.set_subscribed(chat_id, callback_data.id, enable)
+    if result is None:
+        await callback.answer("Этот фильтр уже удалён", show_alert=True)
+        return
+
+    text, keyboard = await _saved_list(chat_id)
+    await _safe_edit(callback.message, text, reply_markup=keyboard)
+    if enable:
+        info = await saved_filters.get(chat_id, callback_data.id)
+        await callback.answer("Подписка включена")
+        await callback.message.answer(format_subscription_on(info.name, worker.interval // 60))
+        worker.check_soon(callback_data.id, chat_id)  # первая, «тихая» проверка
+    else:
+        await callback.answer("Подписка выключена")
+
+
+@router.callback_query(HideCb.filter())
+async def on_hide_vacancy(callback: types.CallbackQuery, callback_data: HideCb):
+    await subscriptions.hide_vacancy(callback.message.chat.id, callback_data.vacancy)
+    url = None
+    markup = callback.message.reply_markup
+    if markup and markup.inline_keyboard and markup.inline_keyboard[0]:
+        url = markup.inline_keyboard[0][0].url
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_reply_markup(reply_markup=hidden_keyboard(url) if url else None)
+    await callback.answer("Скрыто 🙈")
 
 
 @router.callback_query(SavedCb.filter(F.action == "rename_cancel"))
