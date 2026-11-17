@@ -1,5 +1,5 @@
+from app.models.filter_vacancy import FilterVacancy
+from app.models.saved_filter import SavedFilter
 from app.models.vacancy import Vacancy
-from app.models.subscription import Subscription
-from app.models.subscription_vacancy import SubscriptionVacancy
 
-__all__ = ["Vacancy", "Subscription", "SubscriptionVacancy"]
+__all__ = ["Vacancy", "SavedFilter", "FilterVacancy"]

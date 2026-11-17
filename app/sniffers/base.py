@@ -1,12 +1,12 @@
-from app.config import Settings, get_settings
-
-from playwright.async_api import async_playwright, Browser, BrowserContext, Page
-
-from app.sniffers.schemas import SearchResult
-
-from abc import ABC, abstractmethod
 import asyncio
 import random
+from abc import ABC, abstractmethod
+from contextlib import suppress
+
+from playwright.async_api import Browser, BrowserContext, Page, async_playwright
+
+from app.config import Settings, get_settings
+from app.sniffers.schemas import SearchResult
 
 # Стабильные User-Agent'ы
 USER_AGENTS = [
@@ -57,10 +57,8 @@ class BaseSniffer(ABC):
         # Безопасно вызывать даже если start() упал на полпути
         for resource in (self.page, self.context, self.browser):
             if resource is not None:
-                try:
+                with suppress(Exception):
                     await resource.close()
-                except Exception:
-                    pass
         if getattr(self, "playwright", None) is not None:
             await self.playwright.stop()
         self.page = self.context = self.browser = None

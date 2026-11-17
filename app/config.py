@@ -10,7 +10,12 @@ class Settings(BaseSettings):
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
         extra="ignore",
+        env_ignore_empty=True,  # «KEY=» в .env -> значение по умолчанию
     )
+
+    # --- Database ---
+    # Относительный путь SQLite считается от корня проекта
+    database_url: str = "sqlite+aiosqlite:///./data/jobs.db"
 
     # --- Browser ---
     headless: bool = True

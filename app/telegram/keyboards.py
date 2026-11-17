@@ -2,6 +2,7 @@ from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.services.filters import AREAS, MAX_LOCATIONS, SearchFilters, area_name
+from app.services.saved_filters import SavedFilterInfo
 from app.sniffers.hh.query import EmploymentForm, Experience, WorkFormat
 from app.telegram.formatter import format_location
 from app.telegram.labels import EMPLOYMENT_LABELS, EXPERIENCE_LABELS, WORK_FORMAT_LABELS
@@ -28,6 +29,12 @@ class PageCb(CallbackData, prefix="p"):
     page: int
 
 
+class SavedCb(CallbackData, prefix="s"):
+    # save | update | save_new | list | run | edit | del | del_yes | rename | rename_cancel
+    action: str
+    id: int = 0
+
+
 def _btn(text: str, cb: CallbackData) -> InlineKeyboardButton:
     return InlineKeyboardButton(text=text, callback_data=cb.pack())
 
@@ -37,12 +44,13 @@ def _toggle(text: str, selected: bool, cb: CallbackData) -> InlineKeyboardButton
 
 
 def _chunks(items: list, size: int) -> list[list]:
-    return [items[i:i + size] for i in range(0, len(items), size)]
+    return [items[i : i + size] for i in range(0, len(items), size)]
 
 
 # ---------------------------------------------------------------- панель фильтров
 
-def filters_keyboard(filters: SearchFilters, home_area_id: int) -> InlineKeyboardMarkup:
+
+def filters_keyboard(filters: SearchFilters, home_area_id: int, loaded_id: int | None = None) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
 
     for i, rule in enumerate(filters.locations):
@@ -55,24 +63,83 @@ def filters_keyboard(filters: SearchFilters, home_area_id: int) -> InlineKeyboar
     loc_row.append(_btn(f"🏠 Удалёнка + {area_name(home_area_id)}", LocCb(action="preset")))
     rows.append(loc_row)
 
-    rows.append([
-        _toggle(EMPLOYMENT_LABELS[e.value], e in filters.employment_forms, FilterCb(group="emp", value=e.value))
-        for e in (EmploymentForm.FULL, EmploymentForm.PART, EmploymentForm.PROJECT)
-    ])
+    rows.append(
+        [
+            _toggle(EMPLOYMENT_LABELS[e.value], e in filters.employment_forms, FilterCb(group="emp", value=e.value))
+            for e in (EmploymentForm.FULL, EmploymentForm.PART, EmploymentForm.PROJECT)
+        ]
+    )
     exp_buttons = [
         _toggle(EXPERIENCE_LABELS[e.value], e in filters.experiences, FilterCb(group="exp", value=e.value))
         for e in Experience
     ]
     rows.extend(_chunks(exp_buttons, 2))
     rows.append([_toggle("Только с ЗП", filters.only_with_salary, FilterCb(group="salary"))])
-    rows.append([
-        _btn("🔍 Искать", ActionCb(action="search")),
-        _btn("🧹 Сбросить", ActionCb(action="reset")),
-    ])
+    rows.append(
+        [
+            _btn("🔍 Искать", ActionCb(action="search")),
+            _btn("🧹 Сбросить", ActionCb(action="reset")),
+        ]
+    )
+    if loaded_id is None:
+        rows.append([_btn("💾 Сохранить", SavedCb(action="save")), _btn("📂 Мои фильтры", SavedCb(action="list"))])
+    else:
+        rows.append(
+            [
+                _btn("💾 Обновить", SavedCb(action="update", id=loaded_id)),
+                _btn("📄 Как новый", SavedCb(action="save_new")),
+                _btn("📂 Мои", SavedCb(action="list")),
+            ]
+        )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+# ---------------------------------------------------------------- сохранённые фильтры
+
+
+def saved_list_keyboard(items: list[SavedFilterInfo]) -> InlineKeyboardMarkup:
+    rows = []
+    for i, item in enumerate(items, 1):
+        name = item.name if len(item.name) <= 28 else item.name[:27] + "…"
+        rows.append(
+            [
+                _btn(f"▶️ {i}. {name}", SavedCb(action="run", id=item.id)),
+                _btn("✏️", SavedCb(action="edit", id=item.id)),
+                _btn("🗑", SavedCb(action="del", id=item.id)),
+            ]
+        )
+    rows.append([_btn("⚙️ Панель фильтров", ActionCb(action="filters"))])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def delete_confirm_keyboard(filter_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                _btn("🗑 Да, удалить", SavedCb(action="del_yes", id=filter_id)),
+                _btn("Отмена", SavedCb(action="list")),
+            ]
+        ]
+    )
+
+
+def saved_done_keyboard(filter_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                _btn("✏️ Переименовать", SavedCb(action="rename", id=filter_id)),
+                _btn("📂 Мои фильтры", SavedCb(action="list")),
+            ]
+        ]
+    )
+
+
+def rename_cancel_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[_btn("Отмена", SavedCb(action="rename_cancel"))]])
+
+
 # ---------------------------------------------------------------- редактор локации
+
 
 def area_options(home_area_id: int) -> list[int | None]:
     options = list(AREAS)
@@ -93,15 +160,20 @@ def location_editor_keyboard(filters: SearchFilters, index: int, home_area_id: i
     rule = filters.locations[index]
 
     area_buttons = [
-        _btn(f"{'🔘' if rule.area_id == a else '⚪'} {area_name(a)}", LocCb(action="area", idx=index, value=encode_area(a)))
+        _btn(
+            f"{'🔘' if rule.area_id == a else '⚪'} {area_name(a)}",
+            LocCb(action="area", idx=index, value=encode_area(a)),
+        )
         for a in area_options(home_area_id)
     ]
     rows = _chunks(area_buttons, 3)
 
-    rows.append([
-        _toggle(WORK_FORMAT_LABELS[f.value], f in rule.work_formats, LocCb(action="wf", idx=index, value=f.value))
-        for f in (WorkFormat.REMOTE, WorkFormat.HYBRID, WorkFormat.ON_SITE)
-    ])
+    rows.append(
+        [
+            _toggle(WORK_FORMAT_LABELS[f.value], f in rule.work_formats, LocCb(action="wf", idx=index, value=f.value))
+            for f in (WorkFormat.REMOTE, WorkFormat.HYBRID, WorkFormat.ON_SITE)
+        ]
+    )
 
     last_row = []
     if len(filters.locations) > 1:
@@ -113,19 +185,24 @@ def location_editor_keyboard(filters: SearchFilters, index: int, home_area_id: i
 
 # ---------------------------------------------------------------- выдача
 
+
 def results_keyboard(page: int, pages: int) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     noop = ActionCb(action="noop")
 
     if pages > 1:
-        rows.append([
-            _btn("◀️" if page > 0 else "·", PageCb(page=page - 1) if page > 0 else noop),
-            _btn(f"{page + 1}/{pages}", noop),
-            _btn("▶️" if page < pages - 1 else "·", PageCb(page=page + 1) if page < pages - 1 else noop),
-        ])
+        rows.append(
+            [
+                _btn("◀️" if page > 0 else "·", PageCb(page=page - 1) if page > 0 else noop),
+                _btn(f"{page + 1}/{pages}", noop),
+                _btn("▶️" if page < pages - 1 else "·", PageCb(page=page + 1) if page < pages - 1 else noop),
+            ]
+        )
 
-    rows.append([
-        _btn("🔄 Обновить", ActionCb(action="refresh")),
-        _btn("⚙️ Фильтры", ActionCb(action="filters")),
-    ])
+    rows.append(
+        [
+            _btn("🔄 Обновить", ActionCb(action="refresh")),
+            _btn("⚙️ Фильтры", ActionCb(action="filters")),
+        ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)

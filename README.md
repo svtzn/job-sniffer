@@ -16,32 +16,81 @@
 
 ## 🕵️ About
 
-**Job Sniffer** is a self-hosted Telegram bot for searching and monitoring job vacancies.
+**Job Sniffer** is a self-hosted Telegram bot for searching job vacancies on **HH.ru**.
 
-The project currently focuses on **HH.ru** and uses browser-based scraping with Playwright instead of the official HH API.
-
-The goal is to turn the usual job search into a personalized vacancy monitoring system.
-
-- Define what kind of jobs you want
-- Search vacancies directly from Telegram
-- Apply custom filters
-- Receive relevant vacancies automatically
-
-The architecture is designed with multiple job platforms in mind, so HH.ru is only the first supported source.
+It drives a real browser (Playwright) instead of the official HH API, reads the structured
+vacancy data HH embeds into its search pages and shows the results in Telegram with filters
+that the HH website itself can't combine — for example, *remote jobs anywhere in Russia*
+**plus** *office jobs in your own city* in a single result list.
 
 ---
 
 ## ✨ Features
 
-- 🔎 Vacancy search through Telegram
-- 🕵️ HH.ru browser scraping
-- 🎭 Playwright + playwright-stealth
-- 🍲 BeautifulSoup HTML parsing
-- 🎛️ Vacancy filtering
-- 📄 Paginated search results
-- 🌐 Proxy support
-- 🧩 Extensible sniffer architecture
-- 🐳 Docker-ready
+- 🔎 Vacancy search right from Telegram
+- 📍 Multi-location filters: up to 4 "area + work format" rules merged into one result list
+- 🎛️ Filters: experience, employment type, "only with salary"
+- 💰 Accurate salary data (from/to, currency, gross/net) from HH's embedded page state
+- 📄 Paginated results with deduplication across pages and locations
+- 💾 Saved filters: save, rename, run, edit, delete (`/myfilters`)
+- 🗃️ Every search result is stored in a local SQLite database
+- 🌐 Telegram proxy support
+
+---
+
+## 🚀 Quick Start
+
+Requirements: Python 3.12+, [uv](https://docs.astral.sh/uv/), a Telegram bot token from [@BotFather](https://t.me/BotFather).
+
+```bash
+uv sync
+```
+
+```bash
+uv run playwright install chromium
+```
+
+Copy `.env.example` to `.env` and set `TELEGRAM_BOT_TOKEN` (see [Configuration](#️-configuration)), then start the bot:
+
+```bash
+uv run python -m app.telegram.bot
+```
+
+Database migrations are applied automatically on startup.
+
+---
+
+## 🤖 Bot Usage
+
+| Command | What it does |
+|---|---|
+| `/start` | Help and the filter panel |
+| `/filters` | Filter panel: locations, experience, employment, salary |
+| `/search <text>` | Search with current filters (without text — repeat the last query) |
+| `/myfilters` | Saved filters |
+| `/help` | Help |
+
+Any plain text message is treated as a search query with the current filters.
+
+---
+
+## ⚙️ Configuration
+
+All settings live in `.env` (see `.env.example`). Empty values fall back to defaults.
+
+| Variable | Default | Description |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | — | Bot token (required) |
+| `TELEGRAM_PROXY_URL` | — | Proxy for Telegram, e.g. `http://127.0.0.1:10809` |
+| `DATABASE_URL` | `sqlite+aiosqlite:///./data/jobs.db` | Relative SQLite paths are resolved from the project root |
+| `HEADLESS` | `true` | Run Chromium without a window |
+| `DELAY_MIN` / `DELAY_MAX` | `2.0` / `5.0` | Random delay between HH page loads, seconds |
+| `HH_BASE_URL` | `https://krasnodar.hh.ru/search/vacancy` | HH search page |
+| `SEARCH_LIMIT` | `100` | Max vacancies collected per search |
+| `RESULTS_PAGE_SIZE` | `5` | Vacancies per page in the bot |
+| `HOME_AREA_ID` | `53` | HH area id for the "Remote + my city" preset (53 — Krasnodar, 1 — Moscow, 2 — St. Petersburg) |
+
+Browser fingerprint settings (`VIEWPORT_*`, `LOCALE`, `TIMEZONE_ID`, `HH_WAIT_UNTIL`) rarely need changes.
 
 ---
 
@@ -50,176 +99,68 @@ The architecture is designed with multiple job platforms in mind, so HH.ru is on
 | Technology | Purpose |
 |------------|---------|
 | Python 3.12 | Core application |
-| aiogram | Telegram Bot API |
+| aiogram 3 | Telegram Bot API |
 | Playwright | Browser automation |
-| playwright-stealth | Automation detection mitigation |
 | BeautifulSoup4 | HTML parsing |
-| SQLAlchemy | Database ORM |
-| PostgreSQL | Persistent storage |
+| SQLAlchemy 2 (async) + aiosqlite | Storage |
 | Alembic | Database migrations |
-| Pydantic | Data validation |
 | pydantic-settings | Configuration |
-| Docker | Containerization |
 | uv | Dependency management |
 
 ---
 
 ## 📁 Project Structure
 
+```text
 job-sniffer/
 ├── app/
-│   ├── main.py
-│   ├── config.py
+│   ├── config.py               # settings from .env
+│   ├── main.py                 # manual search run without Telegram
 │   │
-│   ├── db/
-│   │   └── base.py
-│   │
-│   ├── models/
-│   │   ├── vacancy.py
-│   │   ├── subscription.py
-│   │   └── subscription_vacancy.py
-│   │
-│   ├── services/
-│   │   ├── filters.py       # SearchFilters + LocationRule, (де)сериализация
-│   │   └── search.py        # запрос на каждую локацию -> склейка -> SearchOutcome
-│   │
-│   ├── sniffers/
-│   │   ├── base.py
-│   │   ├── schemas.py       # VacancyData, Salary, SearchResult
+│   ├── sniffers/               # getting data from job sites
+│   │   ├── base.py             # browser lifecycle
+│   │   ├── schemas.py          # VacancyData, Salary, SearchResult
 │   │   └── hh/
-│   │       ├── sniffer.py   # пагинация + дедупликация
-│   │       ├── parser.py    # JSON HH-Lux-InitialState, HTML как fallback
-│   │       └── query.py
+│   │       ├── query.py        # HH search URL parameters
+│   │       ├── parser.py       # HH-Lux-InitialState JSON, HTML cards as fallback
+│   │       └── sniffer.py      # pagination + deduplication
+│   │
+│   ├── services/               # business logic, independent of Telegram
+│   │   ├── filters.py          # SearchFilters, LocationRule
+│   │   ├── search.py           # one request per location -> merged result
+│   │   └── saved_filters.py    # saved filters CRUD
+│   │
+│   ├── db/                     # engine, session, types, migrations runner
+│   ├── models/                 # Vacancy, SavedFilter, FilterVacancy
+│   ├── repositories/           # all SQL lives here
 │   │
 │   └── telegram/
-│       ├── bot.py
-│       ├── handlers.py      # только UI-логика
-│       ├── keyboards.py     # inline-кнопки и CallbackData
-│       ├── formatter.py     # HTML-тексты сообщений
-│       ├── labels.py        # подписи для кодов HH
-│       └── state.py         # состояние чата (в памяти)
+│       ├── bot.py              # entry point
+│       ├── handlers.py         # UI logic only
+│       ├── keyboards.py        # inline keyboards, CallbackData
+│       ├── formatter.py        # message texts (HTML)
+│       ├── labels.py           # human-readable HH codes
+│       └── state.py            # per-chat state in memory
 │
-├── docs/
-│   ├── job-sniffer-technical-specification.md
-│   └── hh-russia-parsing-analysis.md
-│
-├── Dockerfile
-├── docker-compose.yml
-├── pyproject.toml
-└── README.md
+├── alembic/                    # migrations
+├── alembic.ini
+├── .env.example
+└── pyproject.toml
+```
 
 ---
 
-## 🚀 Current Status
+## 💾 Database
 
-The first working prototype currently supports:
+SQLite file `data/jobs.db` (created automatically). Manual migration commands:
 
-- Telegram-based vacancy search
-- Basic vacancy filters
-- HH.ru scraping
-- HTML parsing
-- Vacancy normalization
-- Paginated search results
-- Proxy support
+```bash
+uv run alembic upgrade head
+```
 
-### Current filters
-
-Locations (multi-location search). A filter holds up to 4 locations,
-each is "area + work formats"; results of all locations are merged
-without duplicates and interleaved (freshest first within each location). Example:
-- Russia · Remote
-- Krasnodar · On-site, Hybrid
-
-One-tap preset "Remote + my city" (`HOME_AREA_ID` in `.env`).
-
-Work format (per location):
-- Remote
-- Hybrid
-- On-site
-
-Employment:
-- Full-time
-- Part-time
-- Project
-
-Salary:
-- Only with salary
-
-Experience:
-- No experience
-- 1–3 years
-- 3–6 years
-- 6+ years
-
----
-
-## 🗺️ Roadmap
-
-### Phase 1 — HH Sniffer
-
-- [x] Playwright integration
-- [x] HH.ru page retrieval
-- [x] HTML parsing
-- [x] Vacancy normalization
-- [x] Basic search
-
-### Phase 2 — Search Engine
-
-- [ ] Advanced filters
-- [x] Multi-filter search (merged multi-location results)
-- [x] Location-aware filters
-- [ ] Custom search presets
-
-### Phase 3 — Persistence
-
-- [ ] PostgreSQL integration
-- [ ] User storage
-- [ ] Vacancy storage
-- [ ] Search history
-- [ ] Duplicate detection
-
-### Phase 4 — Subscriptions
-
-- [ ] Saved searches
-- [ ] Vacancy subscriptions
-- [ ] Background polling
-- [ ] New vacancy detection
-
-### Phase 5 — Notifications
-
-- [ ] Automatic Telegram notifications
-- [ ] Notification preferences
-- [ ] Vacancy deduplication
-- [ ] Per-search notification settings
-
-### Phase 6 — Multi-source
-
-- [ ] Additional job platforms
-- [ ] Unified vacancy model
-- [ ] Source-specific sniffers
-- [ ] Cross-platform search
-
----
-
-## 🎯 Vision
-
-Job Sniffer is intended to evolve from a simple vacancy search bot into a personal job-search automation tool.
-
-Search manually
-      ↓
-Save your filters
-      ↓
-Run searches automatically
-      ↓
-Detect new vacancies
-      ↓
-Get notified
-      ↓
-Apply
-
-The end goal is simple:
-
-> You define what you're looking for. Job Sniffer does the boring part.
+```bash
+uv run alembic revision --autogenerate -m "describe change"
+```
 
 ---
 
@@ -227,4 +168,5 @@ The end goal is simple:
 
 Job Sniffer is a personal self-hosted project intended for educational and research purposes.
 
-The project does not use the official HH.ru API for vacancy retrieval. Website structure and anti-bot mechanisms may change over time, which can require updates to the corresponding sniffer.
+The project does not use the official HH.ru API. Website structure and anti-bot mechanisms
+may change over time, which can require updates to the corresponding sniffer.

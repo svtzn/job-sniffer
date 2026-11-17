@@ -10,6 +10,8 @@ import math
 from dataclasses import dataclass, field
 
 from app.config import get_settings
+from app.db.session import get_sessionmaker
+from app.repositories import vacancies as vacancies_repo
 from app.services.filters import LocationRule, SearchFilters
 from app.sniffers.hh.sniffer import HHSniffer
 from app.sniffers.schemas import VacancyData
@@ -40,6 +42,29 @@ class SearchOutcome:
         return sum(totals) if totals else None
 
 
+async def search_and_store(filters: SearchFilters, saved_filter_id: int | None = None) -> SearchOutcome:
+    """Поиск + сохранение выдачи в БД.
+
+    Если поиск шёл по сохранённому фильтру, найденные вакансии отмечаются
+    как уже виденные по нему — подписка потом пришлёт только новые.
+    Ошибка БД не должна лишать пользователя выдачи, поэтому она только логируется.
+    """
+    outcome = await search_vacancies(filters)
+    try:
+        await store_outcome(outcome, saved_filter_id)
+    except Exception:
+        logger.exception("Не удалось сохранить выдачу в БД")
+    return outcome
+
+
+async def store_outcome(outcome: SearchOutcome, saved_filter_id: int | None = None) -> dict[tuple[str, str], int]:
+    async with get_sessionmaker()() as session, session.begin():
+        ids = await vacancies_repo.upsert_vacancies(session, outcome.vacancies)
+        if saved_filter_id is not None:
+            await vacancies_repo.mark_seen(session, saved_filter_id, list(ids.values()))
+    return ids
+
+
 def search_is_busy() -> bool:
     return _browser_lock.locked()
 
@@ -54,15 +79,14 @@ async def search_vacancies(filters: SearchFilters, limit: int | None = None) -> 
     # общий бюджет делится между локациями, чтобы 2 локации не искались вдвое дольше
     per_location = max(1, math.ceil(limit / len(queries)))
 
-    async with _browser_lock:
-        async with HHSniffer(settings) as sniffer:
-            per_rule: list[list[VacancyData]] = []
-            outcomes: list[LocationOutcome] = []
-            for rule, query in zip(filters.locations, queries):
-                logger.info("Поиск: %s (limit=%s)", query.get_url(), per_location)
-                result = await sniffer.fetch_vacancies(query, limit=per_location)
-                per_rule.append(result.vacancies)
-                outcomes.append(LocationOutcome(rule, result.total_found, len(result.vacancies)))
+    per_rule: list[list[VacancyData]] = []
+    outcomes: list[LocationOutcome] = []
+    async with _browser_lock, HHSniffer(settings) as sniffer:
+        for rule, query in zip(filters.locations, queries, strict=True):
+            logger.info("Поиск: %s (limit=%s)", query.get_url(), per_location)
+            result = await sniffer.fetch_vacancies(query, limit=per_location)
+            per_rule.append(result.vacancies)
+            outcomes.append(LocationOutcome(rule, result.total_found, len(result.vacancies)))
 
     vacancies, matched = merge_results(per_rule)
     return SearchOutcome(vacancies=vacancies, locations=outcomes, matched_locations=matched)

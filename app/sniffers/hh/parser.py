@@ -29,7 +29,6 @@ _CURRENCY_SYMBOLS = {"₽": "RUR", "$": "USD", "€": "EUR", "£": "GBP", "₸":
 
 
 class HHParser:
-
     def parse_page(self, html: str) -> PageResult:
         soup = BeautifulSoup(html, "html.parser")
 
@@ -44,10 +43,6 @@ class HHParser:
             fallback.total_found = fallback.total_found or result.total_found
             fallback.last_page = fallback.last_page if fallback.last_page is not None else result.last_page
         return fallback
-
-    # Обратная совместимость со старым API
-    def parse_vacancies(self, html: str) -> list[VacancyData]:
-        return self.parse_page(html).vacancies
 
     # ------------------------------------------------------------------ JSON
 
@@ -147,16 +142,20 @@ class HHParser:
             if exp_el is not None:
                 experience = exp_el.get("data-qa", "").rsplit("-", 1)[-1] or None
 
-            vacancies.append(VacancyData(
-                id=vacancy_id,
-                title=title_el.get_text(" ", strip=True) if title_el else "",
-                url=f"https://hh.ru/vacancy/{vacancy_id}",
-                employer=_text(card, '[data-qa="vacancy-serp__vacancy-employer-text"]'),
-                salary=self._salary_from_html(card),
-                experience=experience,
-                work_formats=["REMOTE"] if card.select_one('[data-qa="vacancy-label-work-schedule-remote"]') else [],
-                area=_text(card, '[data-qa="vacancy-serp__vacancy-address"]'),
-            ))
+            vacancies.append(
+                VacancyData(
+                    id=vacancy_id,
+                    title=title_el.get_text(" ", strip=True) if title_el else "",
+                    url=f"https://hh.ru/vacancy/{vacancy_id}",
+                    employer=_text(card, '[data-qa="vacancy-serp__vacancy-employer-text"]'),
+                    salary=self._salary_from_html(card),
+                    experience=experience,
+                    work_formats=["REMOTE"]
+                    if card.select_one('[data-qa="vacancy-label-work-schedule-remote"]')
+                    else [],
+                    area=_text(card, '[data-qa="vacancy-serp__vacancy-address"]'),
+                )
+            )
 
         return PageResult(vacancies=vacancies)
 

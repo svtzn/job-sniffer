@@ -16,7 +16,6 @@ MAX_PAGES = 100
 
 
 class HHSniffer(BaseSniffer):
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.parser = HHParser()
@@ -74,8 +73,8 @@ class HHSniffer(BaseSniffer):
 
         try:
             await self.page.goto(url, wait_until=self.config.hh_wait_until)
-        except PlaywrightTimeoutError:
-            raise TimeoutError(f"Не удалось загрузить: {url}")
+        except PlaywrightTimeoutError as e:
+            raise TimeoutError(f"Не удалось загрузить: {url}") from e
 
         await self._random_delay()
         return await self.page.content()

@@ -3,6 +3,7 @@
 from html import escape
 
 from app.services.filters import LocationRule, SearchFilters
+from app.services.saved_filters import MAX_NAME_LENGTH, SavedFilterInfo
 from app.services.search import SearchOutcome
 from app.sniffers.schemas import Salary, VacancyData
 from app.telegram.labels import (
@@ -54,7 +55,8 @@ def format_common_summary(filters: SearchFilters) -> str:
     """Общая часть фильтра: «Полная · 1–3 года · только с ЗП» или «без доп. условий»."""
     parts: list[str] = []
     if filters.employment_forms:
-        parts.append(", ".join(EMPLOYMENT_LABELS[e.value] for e in sorted(filters.employment_forms, key=lambda e: e.value)))
+        employment = sorted(filters.employment_forms, key=lambda e: e.value)
+        parts.append(", ".join(EMPLOYMENT_LABELS[e.value] for e in employment))
     if filters.experiences:
         parts.append(", ".join(EXPERIENCE_LABELS[e.value] for e in sorted(filters.experiences, key=lambda e: e.value)))
     if filters.only_with_salary:
@@ -70,10 +72,15 @@ def _locations_block(filters: SearchFilters) -> str:
     return "\n".join(lines)
 
 
-def format_filters_panel(filters: SearchFilters) -> str:
+def format_filters_panel(filters: SearchFilters, saved_name: str | None = None, modified: bool = False) -> str:
     query = f"<b>{escape(filters.text)}</b>" if filters.text else "<i>не задан</i>"
+    saved = ""
+    if saved_name:
+        saved = f"📂 Сохранённый фильтр: <b>{escape(saved_name)}</b>"
+        saved += " <i>(изменён, не сохранено)</i>\n" if modified else "\n"
     return (
         "⚙️ <b>Фильтры поиска</b>\n\n"
+        f"{saved}"
         f"🔤 Запрос: {query}\n"
         f"{_locations_block(filters)}\n"
         f"🎛 {escape(format_common_summary(filters))}\n\n"
@@ -81,6 +88,33 @@ def format_filters_panel(filters: SearchFilters) -> str:
         "например, удалёнка по России + офис в своём городе.\n"
         "Потом просто отправь текст запроса (например, <code>python junior</code>)."
     )
+
+
+def default_filter_name(filters: SearchFilters) -> str:
+    """«python · Россия · Удалённо + Краснодар · Гибрид, Офис» (обрезается до лимита)."""
+    name = f"{filters.text.strip()} · " + " + ".join(format_location(r) for r in filters.locations)
+    return name if len(name) <= MAX_NAME_LENGTH else name[: MAX_NAME_LENGTH - 1] + "…"
+
+
+def format_saved_list(items: list[SavedFilterInfo]) -> str:
+    if not items:
+        return "📂 <b>Мои фильтры</b>\n\nПока пусто. Настрой фильтр в /filters, задай запрос и нажми «💾 Сохранить»."
+    lines = ["📂 <b>Мои фильтры</b>", ""]
+    for i, item in enumerate(items, 1):
+        f = item.filters
+        where = format_location(f.locations[0]) if len(f.locations) == 1 else f"{len(f.locations)} локации"
+        lines.append(f"{i}. <b>{escape(item.name)}</b>")
+        lines.append(f"   «{escape(f.text)}» · {escape(where)} · {escape(format_common_summary(f))}")
+    lines += ["", "▶️ — искать, ✏️ — открыть в панели фильтров, 🗑 — удалить"]
+    return "\n".join(lines)
+
+
+def format_delete_confirm(item: SavedFilterInfo) -> str:
+    return f"🗑 Удалить фильтр <b>{escape(item.name)}</b>?\n\nЭто действие нельзя отменить."
+
+
+def format_rename_prompt(item: SavedFilterInfo) -> str:
+    return f"✏️ Новое название для <b>{escape(item.name)}</b>?\nОтправь его сообщением (до {MAX_NAME_LENGTH} символов)."
 
 
 def format_location_editor(filters: SearchFilters, index: int) -> str:
@@ -92,8 +126,8 @@ def format_location_editor(filters: SearchFilters, index: int) -> str:
 
 
 def format_vacancy(index: int, v: VacancyData, location_labels: list[str] | None = None) -> str:
-    title = v.title if len(v.title) <= _MAX_TITLE else v.title[:_MAX_TITLE - 1] + "…"
-    lines = [f"<b>{index}. <a href=\"{escape(v.url, quote=True)}\">{escape(title)}</a></b>"]
+    title = v.title if len(v.title) <= _MAX_TITLE else v.title[: _MAX_TITLE - 1] + "…"
+    lines = [f'<b>{index}. <a href="{escape(v.url, quote=True)}">{escape(title)}</a></b>']
 
     salary = format_salary(v.salary)
     lines.append(f"💰 {escape(salary)}" if salary else "💰 <i>з/п не указана</i>")
@@ -137,9 +171,11 @@ def format_results_page(
     page: int,
     pages: int,
     page_size: int,
+    saved_name: str | None = None,
 ) -> str:
     multi = len(result.locations) > 1
-    header = [f"🔍 <b>«{escape(filters.text)}»</b>"]
+    header = [f"📂 {escape(saved_name)}"] if saved_name else []
+    header.append(f"🔍 <b>«{escape(filters.text)}»</b>")
     if not multi:
         header.append(f"📍 {escape(format_location(filters.locations[0]))}")
     header.append(f"🎛 {escape(format_common_summary(filters))}")
@@ -167,12 +203,13 @@ def format_results_page(
     for i, v in enumerate(vacancies, 1):
         labels = None
         if multi:
-            labels = [format_location(result.locations[idx].rule) for idx in sorted(result.matched_locations.get(v.id, []))]
+            matched = sorted(result.matched_locations.get(v.id, []))
+            labels = [format_location(result.locations[idx].rule) for idx in matched]
         cards.append(format_vacancy(page * page_size + i, v, labels))
 
     text = "\n".join(header) + "\n\n" + "\n\n".join(cards)
     if len(text) > TELEGRAM_LIMIT:  # страховка; при 5 карточках на страницу не срабатывает
-        text = text[:TELEGRAM_LIMIT - 1] + "…"
+        text = text[: TELEGRAM_LIMIT - 1] + "…"
     return text
 
 

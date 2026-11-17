@@ -24,8 +24,17 @@ EXPERIENCE_LABELS: dict[str, str] = {
 }
 
 CURRENCY_SYMBOLS: dict[str, str] = {
-    "RUR": "₽", "RUB": "₽", "USD": "$", "EUR": "€", "GBP": "£",
-    "KZT": "₸", "UAH": "₴", "AZN": "₼", "BYR": "Br", "UZS": "сум", "KGS": "сом",
+    "RUR": "₽",
+    "RUB": "₽",
+    "USD": "$",
+    "EUR": "€",
+    "GBP": "£",
+    "KZT": "₸",
+    "UAH": "₴",
+    "AZN": "₼",
+    "BYR": "Br",
+    "UZS": "сум",
+    "KGS": "сом",
     "GEL": "₾",
 }
 

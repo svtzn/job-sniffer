@@ -84,7 +84,7 @@ class HHQuery:
             if isinstance(value, Enum):
                 params[field.name] = value.value
 
-            elif isinstance(value, (tuple, list, set, frozenset)):
+            elif isinstance(value, tuple | list | set | frozenset):
                 params[field.name] = [v.value if isinstance(v, Enum) else v for v in value]
 
             elif isinstance(value, int):

@@ -116,10 +116,7 @@ class SearchFilters:
             # при объединении нескольких выдач честно сравнивать можно только по дате
             order_by=OrderBy.PUBLICATION_TIME if len(self.locations) > 1 else None,
         )
-        return [
-            HHQuery(area=rule.area_id, work_format=_sorted(rule.work_formats), **common)
-            for rule in self.locations
-        ]
+        return [HHQuery(area=rule.area_id, work_format=_sorted(rule.work_formats), **common) for rule in self.locations]
 
     # ---- сериализация (для БД / подписок)
 
