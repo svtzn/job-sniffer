@@ -64,8 +64,8 @@ Copy `.env.example` to `.env`, set `TELEGRAM_BOT_TOKEN` (see [Configuration](#�
 uv run job-sniffer
 ```
 
-Database migrations are applied automatically on startup. If Telegram is reachable only via VPN/proxy,
-set `TELEGRAM_PROXY_URL`.
+Database migrations are applied automatically on startup. If Telegram is blocked for you,
+see [If Telegram is blocked](#-if-telegram-is-blocked).
 
 ---
 
@@ -95,11 +95,15 @@ All settings live in `.env` (see `.env.example`). Empty values fall back to defa
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | — | Bot token (required) |
 | `TELEGRAM_PROXY_URL` | — | Proxy for Telegram, e.g. `http://127.0.0.1:10809` |
+| `TELEGRAM_API_BASE` | — | Own Bot API address instead of `api.telegram.org` (e.g. a Cloudflare Worker) |
+| `TELEGRAM_KEEPALIVE` | auto | Reuse connections to Telegram; auto = off when `TELEGRAM_API_BASE` is set |
+| `TELEGRAM_TIMEOUT` | `15` | Seconds per Telegram request |
 | `DATABASE_URL` | `sqlite+aiosqlite:///./data/jobs.db` | Relative SQLite paths are resolved from the project root |
 | `HEADLESS` | `true` | Run Chromium without a window |
 | `DELAY_MIN` / `DELAY_MAX` | `2.0` / `5.0` | Random delay between HH page loads, seconds |
 | `HH_BASE_URL` | `https://krasnodar.hh.ru/search/vacancy` | HH search page |
 | `SEARCH_LIMIT` | `100` | Max vacancies collected per search |
+| `SEARCH_TIMEOUT_SECONDS` | `300` | A search taking longer is aborted and the browser is closed |
 | `RESULTS_PAGE_SIZE` | `5` | Vacancies per page in the bot |
 | `HOME_AREA_ID` | `53` | HH area id for the "Remote + my city" preset (53 — Krasnodar, 1 — Moscow, 2 — St. Petersburg) |
 | `SUBSCRIPTION_INTERVAL_MINUTES` | `15` | How often subscriptions are checked |
@@ -107,6 +111,44 @@ All settings live in `.env` (see `.env.example`). Empty values fall back to defa
 | `QUIET_HOURS` | — | e.g. `23-8`: no messages at night, a digest in the morning (local time) |
 
 Browser fingerprint settings (`VIEWPORT_*`, `LOCALE`, `TIMEZONE_ID`, `HH_WAIT_UNTIL`) rarely need changes.
+
+---
+
+### 🔒 If Telegram is blocked
+
+Nothing to do if Telegram works for you directly. Otherwise pick one:
+
+- **VPN/proxy** on the same machine → `TELEGRAM_PROXY_URL=http://127.0.0.1:10809` (or `socks5://…`).
+- **Own Bot API address** (e.g. a Cloudflare Worker that forwards requests to `api.telegram.org`) →
+  `TELEGRAM_API_BASE=https://your-worker.workers.dev`. In this mode every request uses a fresh connection:
+  some providers silently freeze long-lived connections to Cloudflare, which made requests hang.
+
+---
+
+### 🐧 Running on a Linux server
+
+Same commands as in Quick Start (`uv sync`, `uv run playwright install --with-deps chromium`), then a systemd unit,
+e.g. `/etc/systemd/system/job-sniffer.service`:
+
+```ini
+[Unit]
+Description=Job Sniffer Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=youruser
+WorkingDirectory=/home/youruser/job-sniffer
+ExecStart=/home/youruser/.local/bin/uv run job-sniffer
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Settings stay in `.env`. Logs: `journalctl -u job-sniffer -f`. To keep logs across reboots (off by default on Debian):
+`sudo mkdir -p /var/log/journal && sudo systemctl restart systemd-journald`.
 
 ---
 
@@ -154,6 +196,7 @@ job-sniffer/
 │   └── telegram/
 │       ├── bot.py              # entry point (`uv run job-sniffer`)
 │       ├── notifier.py         # background subscription worker
+│       ├── session.py          # Telegram connection: API address, proxy, timeouts
 │       ├── handlers.py         # UI logic only
 │       ├── keyboards.py        # inline keyboards, CallbackData
 │       ├── formatter.py        # message texts (HTML)

@@ -7,6 +7,7 @@ SearchFilters и SearchOutcome. Этот же сервис будет вызыв
 import asyncio
 import logging
 import math
+import time
 from dataclasses import dataclass, field
 
 from app.config import get_settings
@@ -20,6 +21,10 @@ logger = logging.getLogger(__name__)
 
 # Один браузер за раз: HH режет частые запросы, а Chromium ест ~300 МБ
 _browser_lock = asyncio.Semaphore(1)
+
+
+class SearchTimeoutError(TimeoutError):
+    """Поиск целиком не уложился в SEARCH_TIMEOUT_SECONDS."""
 
 
 @dataclass
@@ -84,12 +89,23 @@ async def search_vacancies(
 
     per_rule: list[list[VacancyData]] = []
     outcomes: list[LocationOutcome] = []
-    async with _browser_lock, HHSniffer(settings) as sniffer:
-        for rule, query in zip(filters.locations, queries, strict=True):
-            logger.info("Поиск: %s (limit=%s)", query.get_url(), per_location)
-            result = await sniffer.fetch_vacancies(query, limit=per_location)
-            per_rule.append(result.vacancies)
-            outcomes.append(LocationOutcome(rule, result.total_found, len(result.vacancies)))
+    async with _browser_lock:
+        started = time.monotonic()
+        try:
+            # Предел только на сам поиск (не на ожидание очереди); браузер закроется в __aexit__
+            async with asyncio.timeout(settings.search_timeout_seconds), HHSniffer(settings) as sniffer:
+                for rule, query in zip(filters.locations, queries, strict=True):
+                    logger.info("Поиск: %s (limit=%s)", query.get_url(), per_location)
+                    result = await sniffer.fetch_vacancies(query, limit=per_location)
+                    per_rule.append(result.vacancies)
+                    outcomes.append(LocationOutcome(rule, result.total_found, len(result.vacancies)))
+        except TimeoutError as e:
+            if time.monotonic() - started < settings.search_timeout_seconds:
+                raise  # таймаут загрузки страницы — у него своё сообщение
+            raise SearchTimeoutError(
+                f"HH не ответил за {settings.search_timeout_seconds} с — поиск прерван"
+            ) from e
+        logger.info("Поиск занял %.1f с", time.monotonic() - started)
 
     vacancies, matched = merge_results(per_rule)
     kept = [v for v in vacancies if not filters.is_excluded(v.title)]

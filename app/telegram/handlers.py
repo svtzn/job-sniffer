@@ -292,8 +292,8 @@ async def on_filter(callback: types.CallbackQuery, callback_data: FilterCb, stat
     elif callback_data.group == "salary":
         filters.only_with_salary = not filters.only_with_salary
 
-    await _show_filters_panel(callback.message, session)
     await callback.answer()
+    await _show_filters_panel(callback.message, session)
 
 
 # ---------------------------------------------------------------- локации
@@ -310,32 +310,32 @@ async def on_location(callback: types.CallbackQuery, callback_data: LocCb):
         if new_idx is None:
             await callback.answer(f"Больше {MAX_LOCATIONS} локаций не поддерживается", show_alert=True)
             return
-        await _show_location_editor(callback.message, session, new_idx)
         await callback.answer()
+        await _show_location_editor(callback.message, session, new_idx)
         return
 
     if action == "preset":
         filters.apply_remote_plus_home(_home_area_id())
-        await _show_filters_panel(callback.message, session)
         await callback.answer("Готово: удалёнка по России + офис/гибрид в твоём городе")
+        await _show_filters_panel(callback.message, session)
         return
 
     if action == "done":
-        await _show_filters_panel(callback.message, session)
         await callback.answer()
+        await _show_filters_panel(callback.message, session)
         return
 
     # дальше — действия над конкретной локацией; индекс мог устареть
     if not 0 <= idx < len(filters.locations):
-        await _show_filters_panel(callback.message, session)
         await callback.answer("Эта локация уже удалена")
+        await _show_filters_panel(callback.message, session)
         return
     rule = filters.locations[idx]
 
     if action == "del":
         filters.remove_location(idx)
-        await _show_filters_panel(callback.message, session)
         await callback.answer("Локация удалена")
+        await _show_filters_panel(callback.message, session)
         return
 
     if action == "area":
@@ -345,8 +345,8 @@ async def on_location(callback: types.CallbackQuery, callback_data: LocCb):
         with suppress(ValueError):
             rule.work_formats.symmetric_difference_update({WorkFormat(callback_data.value)})
 
-    await _show_location_editor(callback.message, session, idx)
     await callback.answer()
+    await _show_location_editor(callback.message, session, idx)
 
 
 # ---------------------------------------------------------------- actions
@@ -360,8 +360,8 @@ async def on_noop(callback: types.CallbackQuery):
 @router.callback_query(ActionCb.filter(F.action == "cancel_input"))
 async def on_cancel_input(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
-    await _safe_edit(callback.message, "Отменено.")
     await callback.answer()
+    await _safe_edit(callback.message, "Отменено.")
 
 
 @router.callback_query(ActionCb.filter(F.action == "search"))
@@ -379,8 +379,8 @@ async def on_reset(callback: types.CallbackQuery):
     session = _session(callback.message.chat.id)
     session.filters = SearchFilters()
     session.unload()
-    await _show_filters_panel(callback.message, session)
     await callback.answer("Фильтры сброшены")
+    await _show_filters_panel(callback.message, session)
 
 
 @router.callback_query(ActionCb.filter(F.action == "filters"))
@@ -417,8 +417,8 @@ async def on_save(callback: types.CallbackQuery):
         return
 
     session.load(info)
-    await _show_filters_panel(callback.message, session)
     await callback.answer()
+    await _show_filters_panel(callback.message, session)
     await callback.message.answer(
         f"💾 Сохранено как <b>{escape(info.name)}</b>", reply_markup=saved_done_keyboard(info.id)
     )
@@ -433,23 +433,23 @@ async def on_update(callback: types.CallbackQuery, callback_data: SavedCb):
     info = await saved_filters.update_filters(callback.message.chat.id, callback_data.id, session.filters)
     if info is None:
         session.unload()
-        await _show_filters_panel(callback.message, session)
         await callback.answer("Этот фильтр уже удалён — сохрани как новый", show_alert=True)
+        await _show_filters_panel(callback.message, session)
         return
     session.load(info)
-    await _show_filters_panel(callback.message, session)
     await callback.answer("Фильтр обновлён")
+    await _show_filters_panel(callback.message, session)
 
 
 @router.callback_query(SavedCb.filter(F.action == "list"))
 async def on_saved_list(callback: types.CallbackQuery):
+    await callback.answer()
     text, keyboard = await _saved_list(callback.message.chat.id)
     # «Отмена» в подтверждении удаления — перерисовываем тот же список, иначе шлём новый
     if callback.message.text and callback.message.text.startswith(("📂", "🗑")):
         await _safe_edit(callback.message, text, reply_markup=keyboard)
     else:
         await callback.message.answer(text, reply_markup=keyboard)
-    await callback.answer()
 
 
 async def _get_saved_or_alert(callback: types.CallbackQuery, filter_id: int):
@@ -486,8 +486,8 @@ async def on_saved_delete(callback: types.CallbackQuery, callback_data: SavedCb)
     info = await _get_saved_or_alert(callback, callback_data.id)
     if info is None:
         return
-    await _safe_edit(callback.message, format_delete_confirm(info), reply_markup=delete_confirm_keyboard(info.id))
     await callback.answer()
+    await _safe_edit(callback.message, format_delete_confirm(info), reply_markup=delete_confirm_keyboard(info.id))
 
 
 @router.callback_query(SavedCb.filter(F.action == "del_yes"))
@@ -499,9 +499,9 @@ async def on_saved_delete_confirm(callback: types.CallbackQuery, callback_data: 
         session.unload()
     if session.result_saved and session.result_saved.id == callback_data.id:
         session.result_saved = None
+    await callback.answer("Фильтр удалён" if deleted else "Этот фильтр уже удалён")
     text, keyboard = await _saved_list(chat_id)
     await _safe_edit(callback.message, text, reply_markup=keyboard)
-    await callback.answer("Фильтр удалён" if deleted else "Этот фильтр уже удалён")
 
 
 @router.callback_query(SavedCb.filter(F.action == "rename"))
@@ -524,34 +524,34 @@ async def on_subscription_toggle(callback: types.CallbackQuery, callback_data: S
         await callback.answer("Этот фильтр уже удалён", show_alert=True)
         return
 
+    await callback.answer("Подписка включена" if enable else "Подписка выключена")
+    if enable:
+        worker.check_soon(callback_data.id, chat_id)  # первая, «тихая» проверка
     text, keyboard = await _saved_list(chat_id)
     await _safe_edit(callback.message, text, reply_markup=keyboard)
     if enable:
         info = await saved_filters.get(chat_id, callback_data.id)
-        await callback.answer("Подписка включена")
-        await callback.message.answer(format_subscription_on(info.name, worker.interval // 60))
-        worker.check_soon(callback_data.id, chat_id)  # первая, «тихая» проверка
-    else:
-        await callback.answer("Подписка выключена")
+        if info is not None:
+            await callback.message.answer(format_subscription_on(info.name, worker.interval // 60))
 
 
 @router.callback_query(HideCb.filter())
 async def on_hide_vacancy(callback: types.CallbackQuery, callback_data: HideCb):
     await subscriptions.hide_vacancy(callback.message.chat.id, callback_data.vacancy)
+    await callback.answer("Скрыто 🙈")
     url = None
     markup = callback.message.reply_markup
     if markup and markup.inline_keyboard and markup.inline_keyboard[0]:
         url = markup.inline_keyboard[0][0].url
     with suppress(TelegramBadRequest):
         await callback.message.edit_reply_markup(reply_markup=hidden_keyboard(url) if url else None)
-    await callback.answer("Скрыто 🙈")
 
 
 @router.callback_query(SavedCb.filter(F.action == "rename_cancel"))
 async def on_rename_cancel(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
-    await _safe_edit(callback.message, "Переименование отменено.")
     await callback.answer()
+    await _safe_edit(callback.message, "Переименование отменено.")
 
 
 # ---------------------------------------------------------------- pagination
@@ -568,6 +568,6 @@ async def on_page(callback: types.CallbackQuery, callback_data: PageCb):
         return
 
     session.set_page(callback_data.page)
+    await callback.answer()
     text, keyboard = _render_results(session)
     await _safe_edit(callback.message, text, reply_markup=keyboard)
-    await callback.answer()

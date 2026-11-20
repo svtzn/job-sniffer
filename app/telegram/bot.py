@@ -4,7 +4,6 @@ from contextlib import suppress
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
-from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramNetworkError, TelegramUnauthorizedError
 from aiogram.types import BotCommand
@@ -14,6 +13,7 @@ from app.db.migrations import upgrade_to_head_async
 from app.db.session import dispose_engine
 from app.telegram.handlers import router
 from app.telegram.notifier import SubscriptionWorker
+from app.telegram.session import build_session, describe_session, uses_custom_api
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,25 @@ class StartupError(Exception):
     """Ошибка запуска, которую нужно показать пользователю без трейсбека."""
 
 
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+
+def setup_logging() -> None:
+    # Ничего не делает, если логи уже настроены (например, своей запускалкой)
+    logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
+
+
+def _network_hint(bot: Bot, proxy_url: str) -> str:
+    if proxy_url:
+        return f"Проверь, что прокси {proxy_url} запущен."
+    if uses_custom_api(bot.session.api):
+        return "Проверь, что адрес TELEGRAM_API_BASE в .env открывается."
+    return (
+        "Если Telegram у тебя открывается только через VPN/прокси — "
+        "укажи TELEGRAM_PROXY_URL или TELEGRAM_API_BASE в .env."
+    )
+
+
 async def _connect(bot: Bot, proxy_url: str) -> None:
     try:
         me = await bot.get_me()
@@ -36,16 +55,12 @@ async def _connect(bot: Bot, proxy_url: str) -> None:
     except TelegramUnauthorizedError as e:
         raise StartupError("Telegram отверг токен — проверь TELEGRAM_BOT_TOKEN в .env (выдаёт @BotFather).") from e
     except TelegramNetworkError as e:
-        hint = (
-            f"Проверь, что прокси {proxy_url} запущен."
-            if proxy_url
-            else "Если Telegram у тебя открывается только через VPN/прокси — укажи TELEGRAM_PROXY_URL в .env."
-        )
-        raise StartupError(f"Нет связи с Telegram ({e.message}). {hint}") from e
+        raise StartupError(f"Нет связи с Telegram ({e.message}). {_network_hint(bot, proxy_url)}") from e
     logger.info("Подключён как @%s", me.username)
 
 
 async def main() -> None:
+    setup_logging()
     settings = get_settings()
     if not settings.telegram_bot_token:
         raise StartupError("TELEGRAM_BOT_TOKEN не задан в .env")
@@ -56,7 +71,7 @@ async def main() -> None:
     proxy_url = settings.telegram_proxy_url
     bot = Bot(
         token=settings.telegram_bot_token,
-        session=AiohttpSession(proxy=proxy_url) if proxy_url else None,
+        session=build_session(settings),
         default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True),
     )
     worker = SubscriptionWorker(bot)
@@ -65,7 +80,7 @@ async def main() -> None:
 
     worker_task: asyncio.Task | None = None
     try:
-        logger.info("Proxy: %s", proxy_url or "не задан — прямое подключение")
+        logger.info("Telegram — %s", describe_session(bot.session, proxy_url))
         await _connect(bot, proxy_url)
         worker_task = asyncio.create_task(worker.run(), name="subscriptions")
         logger.info("Job Sniffer запущен, жду сообщения…")
@@ -82,7 +97,7 @@ async def main() -> None:
 
 def run() -> None:
     """Точка входа `uv run job-sniffer`."""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    setup_logging()
     try:
         asyncio.run(main())
     except StartupError as e:

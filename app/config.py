@@ -34,6 +34,7 @@ class Settings(BaseSettings):
 
     # --- Search ---
     search_limit: int = 100  # сколько вакансий собирать за один поиск
+    search_timeout_seconds: int = 300  # предел на весь поиск: зависший браузер не держит очередь вечно
     results_page_size: int = 5  # вакансий на одной странице выдачи в боте
     home_area_id: int = 53  # «мой город» для шаблона «удалёнка + мой город» (53 — Краснодар)
 
@@ -45,6 +46,12 @@ class Settings(BaseSettings):
     # --- Telegram ---
     telegram_bot_token: str = ""
     telegram_proxy_url: str = ""
+    # Свой адрес Bot API (например, Cloudflare Worker, если api.telegram.org заблокирован)
+    telegram_api_base: str = ""
+    # Переиспользовать соединения с Telegram. Пусто = авто: выключено при своём адресе API
+    # (провайдеры «замораживают» долгие соединения с Cloudflare)
+    telegram_keepalive: bool | None = None
+    telegram_timeout: int = 15  # секунд на один запрос к Telegram
 
 
 _settings: Settings | None = None

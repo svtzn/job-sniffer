@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import random
 from abc import ABC, abstractmethod
 from contextlib import suppress
@@ -7,6 +8,10 @@ from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
 from app.config import Settings, get_settings
 from app.sniffers.schemas import SearchResult
+
+logger = logging.getLogger(__name__)
+
+CLOSE_TIMEOUT_SECONDS = 15
 
 # Стабильные User-Agent'ы
 USER_AGENTS = [
@@ -54,13 +59,18 @@ class BaseSniffer(ABC):
         self.page = await self.context.new_page()
 
     async def stop(self):
-        # Безопасно вызывать даже если start() упал на полпути
+        # Безопасно вызывать даже если start() упал на полпути.
+        # Каждый шаг ограничен по времени: зависший Chromium не должен держать бота.
         for resource in (self.page, self.context, self.browser):
             if resource is not None:
                 with suppress(Exception):
-                    await resource.close()
+                    await asyncio.wait_for(resource.close(), CLOSE_TIMEOUT_SECONDS)
         if getattr(self, "playwright", None) is not None:
-            await self.playwright.stop()
+            try:
+                # Остановка драйвера Playwright завершает и процесс браузера
+                await asyncio.wait_for(self.playwright.stop(), CLOSE_TIMEOUT_SECONDS)
+            except Exception as e:
+                logger.warning("Браузер не закрылся за %s с: %r", CLOSE_TIMEOUT_SECONDS, e)
         self.page = self.context = self.browser = None
         self.playwright = None
 
